@@ -1,0 +1,50 @@
+{
+  "name": "@opentrace/cli",
+  "version": "0.1.0",
+  "description": "CLI for setting up and managing OpenTrace integrations",
+  "type": "module",
+  "bin": {
+    "opentrace": "./dist/index.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/opentrace/opentrace-cli.git"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^7.5.1",
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "opentrace",
+    "mcp",
+    "claude",
+    "code-intelligence",
+    "knowledge-graph"
+  ]
+}
