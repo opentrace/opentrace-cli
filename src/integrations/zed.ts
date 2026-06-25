@@ -6,15 +6,19 @@ import { SERVER_KEY, buildMcpUrl } from "../util/constants.js"
 import type { Integration, InstallOptions, InstallResult } from "./types.js"
 
 function configPath(): string {
-  return process.platform === "darwin"
-    ? path.join(os.homedir(), "Library", "Application Support", "Zed", "settings.json")
-    : path.join(os.homedir(), ".local", "share", "zed", "settings.json")
+  switch (process.platform) {
+    case "darwin": return path.join(os.homedir(), "Library", "Application Support", "Zed", "settings.json")
+    case "win32":  return path.join(process.env["APPDATA"] ?? os.homedir(), "Zed", "settings.json")
+    default:       return path.join(os.homedir(), ".local", "share", "zed", "settings.json")
+  }
 }
 
 function detectDir(): string {
-  return process.platform === "darwin"
-    ? path.join(os.homedir(), "Library", "Application Support", "Zed")
-    : path.join(os.homedir(), ".local", "share", "zed")
+  switch (process.platform) {
+    case "darwin": return path.join(os.homedir(), "Library", "Application Support", "Zed")
+    case "win32":  return path.join(process.env["APPDATA"] ?? os.homedir(), "Zed")
+    default:       return path.join(os.homedir(), ".local", "share", "zed")
+  }
 }
 
 interface ZedSettings {

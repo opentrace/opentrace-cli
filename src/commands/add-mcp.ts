@@ -34,7 +34,8 @@ export async function addMcp(targetPath: string, opts: AddMcpOptions): Promise<v
 
   const result = claudeCode.install(dir, { baseUrl, global: false })
 
-  console.log(`\nAdded OpenTrace MCP server to ${result.configPath}`)
+  const verb = result.existed ? "Updated" : "Added"
+  console.log(`\n${verb} OpenTrace MCP server in ${result.configPath}`)
   console.log(`  URL: ${baseUrl.replace(/\/$/, "")}/mcp/v1/`)
   console.log()
   console.log("Restart Claude Code to activate the MCP server.")

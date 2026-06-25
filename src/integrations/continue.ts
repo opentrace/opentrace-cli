@@ -45,8 +45,10 @@ const continueDev: Integration = {
       if (existed) {
         // Replace the existing entry's url line — avoids duplicating the block
         const raw = fs.readFileSync(configPath, "utf8")
+        // Bounded match: stop at the next list item (line starting with optional
+        // whitespace then "- ") so we never cross into adjacent entries.
         const updated = raw.replace(
-          /([ \t]*-[ \t]*name:[ \t]*opentrace[\s\S]*?url:)[ \t]*.*/m,
+          /(-[ \t]*name:[ \t]*opentrace\n(?:[ \t]+(?!-)[ \t]*\S[^\n]*\n)*?[ \t]+url:)[ \t]*.*/m,
           `$1 ${url}`
         )
         fs.writeFileSync(configPath, updated, "utf8")

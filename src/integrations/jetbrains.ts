@@ -6,15 +6,19 @@ import { SERVER_KEY, buildMcpUrl } from "../util/constants.js"
 import type { Integration, InstallOptions, InstallResult } from "./types.js"
 
 function configPath(): string {
-  return process.platform === "darwin"
-    ? path.join(os.homedir(), "Library", "Application Support", "JetBrains", "AIAssistant", "mcp.json")
-    : path.join(os.homedir(), ".config", "JetBrains", "AIAssistant", "mcp.json")
+  switch (process.platform) {
+    case "darwin": return path.join(os.homedir(), "Library", "Application Support", "JetBrains", "AIAssistant", "mcp.json")
+    case "win32":  return path.join(process.env["APPDATA"] ?? os.homedir(), "JetBrains", "AIAssistant", "mcp.json")
+    default:       return path.join(os.homedir(), ".config", "JetBrains", "AIAssistant", "mcp.json")
+  }
 }
 
 function detectDir(): string {
-  return process.platform === "darwin"
-    ? path.join(os.homedir(), "Library", "Application Support", "JetBrains")
-    : path.join(os.homedir(), ".config", "JetBrains")
+  switch (process.platform) {
+    case "darwin": return path.join(os.homedir(), "Library", "Application Support", "JetBrains")
+    case "win32":  return path.join(process.env["APPDATA"] ?? os.homedir(), "JetBrains")
+    default:       return path.join(os.homedir(), ".config", "JetBrains")
+  }
 }
 
 interface JetBrainsMcpConfig {
