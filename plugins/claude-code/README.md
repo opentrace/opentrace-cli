@@ -1,6 +1,6 @@
 # OpenTrace plugin for Claude Code
 
-A thin wrapper around the hosted OpenTrace **dynamic MCP server** (`https://api.opentrace.ai/mcp/v1/`), plus hooks that teach Claude when to reach for it.
+A thin wrapper around the hosted OpenTrace **dynamic MCP server** (`https://api.prod.opentrace.ai/mcp/v1/`), plus hooks that teach Claude when to reach for it.
 
 ## What's included
 
