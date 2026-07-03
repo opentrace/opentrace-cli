@@ -57,12 +57,26 @@ Search the indexed codebase using OpenTrace. Use the `opentrace` MCP tools to...
 
 ### Hooks
 
-`hooks/hooks.json` — 25+ lifecycle events. Hook types: `command`, `http`, `mcp_tool`, `prompt`, `agent`.
+`hooks/hooks.json` — lifecycle events (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, …). Hook types: `command` (script reads payload JSON on stdin, prints result JSON to stdout) and `prompt`. Each event maps to an array of matcher groups, each with its own `hooks` array; `matcher` is a regex against the tool name (omit to match everything):
 
 ```json
 {
   "hooks": {
-    "SessionStart": [{ "type": "mcp_tool", "tool": "opentrace__load_context" }]
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__.*opentrace.*",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-tool-use.sh" }
+        ]
+      }
+    ]
   }
 }
 ```

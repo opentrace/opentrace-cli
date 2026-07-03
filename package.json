@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "CLI for setting up and managing OpenTrace integrations",
   "type": "module",
+  "workspaces": [
+    "plugins/*"
+  ],
   "bin": {
     "opentrace": "./dist/index.js"
   },

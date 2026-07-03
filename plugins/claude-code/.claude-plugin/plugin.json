@@ -1,0 +1,18 @@
+{
+  "name": "opentrace",
+  "version": "0.1.0",
+  "description": "Query your organization's indexed code graphs through the OpenTrace dynamic MCP server",
+  "author": {
+    "name": "OpenTrace Team"
+  },
+  "homepage": "https://opentrace.ai",
+  "repository": "https://github.com/opentrace/opentrace-cli",
+  "license": "Apache-2.0",
+  "keywords": [
+    "opentrace",
+    "mcp",
+    "knowledge-graph",
+    "code-graph",
+    "dependencies"
+  ]
+}
