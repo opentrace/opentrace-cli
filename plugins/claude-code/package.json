@@ -1,0 +1,28 @@
+{
+  "name": "@opentrace/claude-code-plugin",
+  "version": "0.1.0",
+  "description": "OpenTrace plugin for Claude Code — dynamic MCP server plus hooks that promote it",
+  "files": [
+    ".claude-plugin",
+    ".mcp.json",
+    "hooks",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/opentrace/opentrace-cli.git",
+    "directory": "plugins/claude-code"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "opentrace",
+    "claude-code",
+    "claude-plugin",
+    "mcp",
+    "knowledge-graph"
+  ]
+}
