@@ -1,0 +1,13 @@
+{
+  "name": "opentrace",
+  "owner": {
+    "name": "OpenTrace"
+  },
+  "plugins": [
+    {
+      "name": "opentrace",
+      "source": "./plugins/claude-code",
+      "description": "Query your organization's indexed code graphs through the OpenTrace dynamic MCP server"
+    }
+  ]
+}
