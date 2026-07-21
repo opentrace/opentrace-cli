@@ -65,6 +65,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
 
   console.log()
   const results: Array<{ label: string; configPath: string; status: "added" | "updated" | "skipped" }> = []
+  let pluginInstalled = false
 
   for (const integration of targets) {
     const alreadyPresent = integration.hasEntry(dir, { global: isGlobal })
@@ -88,6 +89,19 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
         configPath: result.configPath,
         status: result.existed ? "updated" : "added",
       })
+
+      // Control plane: install the plugin only where the target supports one.
+      // Everything else gets MCP alone.
+      if (integration.plugin) {
+        try {
+          const pluginResult = integration.plugin.install(dir, { global: isGlobal })
+          pluginInstalled = true
+          const verb = pluginResult.alreadyEnabled ? "-" : "✓"
+          console.log(`  ${verb} ${integration.label} plugin  ${pluginResult.configPath}`)
+        } catch (err) {
+          console.error(`  ${integration.label} plugin: failed — ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
     } catch (err) {
       console.error(`  ${integration.label}: failed — ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -101,8 +115,14 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     console.log(`  ${icon} ${r.label.padEnd(colWidth)} ${r.configPath}`)
   }
 
-  if (results.some((r) => r.status !== "skipped")) {
+  const changed = results.some((r) => r.status !== "skipped")
+  if (changed || pluginInstalled) {
     console.log()
-    console.log("Restart your AI tools to activate the OpenTrace MCP server.")
+    console.log("Next steps:")
+    console.log("  1. Restart your AI tools to activate the OpenTrace MCP server.")
+    if (pluginInstalled) {
+      console.log("     Claude Code will prompt to install the OpenTrace plugin — accept it, then run /reload-plugins.")
+    }
+    console.log("  2. In Claude Code, run /mcp and sign in to OpenTrace to authorize the connection.")
   }
 }

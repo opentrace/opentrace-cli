@@ -23,7 +23,8 @@ program
 
 const installCmd = program
   .command("install [path]")
-  .description("Install the OpenTrace MCP server for all detected AI tools (or specific ones)")
+  .alias("connect")
+  .description("Onboard OpenTrace: register the MCP server (and the Claude Code plugin where supported) for all detected AI tools (or specific ones)")
   .option("--base-url <url>", "OpenTrace API base URL", DEFAULT_BASE_URL)
   .option("-y, --yes", "Skip confirmation prompts")
   .option("-g, --global", "Install to user-level config instead of project-level")
