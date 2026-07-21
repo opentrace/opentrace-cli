@@ -93,7 +93,7 @@ The bearer key goes into a **user-scoped** config file in your home directory (n
 ### Editor onboarding (`connect <path>` / `install`)
 
 - **MCP server** — merged into each tool's MCP config (no auth header; the plugin/editor handles OAuth). For Claude Code, `.mcp.json` (project) or `~/.claude/mcp.json` (`--global`).
-- **Claude Code plugin** — declared idempotently in `.claude/settings.json` via `extraKnownMarketplaces` + `enabledPlugins`; Claude Code prompts to install when you trust the folder.
+- **Claude Code plugin** — declared idempotently in `.claude/settings.json` via `extraKnownMarketplaces` + `enabledPlugins`; Claude Code prompts to install when you trust the folder. The plugin's MCP endpoint is configurable: Claude Code prompts for `mcp_url` (default `https://api.opentrace.ai/mcp/v1/`) when the plugin is enabled, so you can point it at a different OpenTrace host without editing the plugin.
 
 ## Authentication
 

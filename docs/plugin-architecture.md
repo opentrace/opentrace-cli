@@ -85,6 +85,8 @@ Search the indexed codebase using OpenTrace. Use the `opentrace` MCP tools to...
 
 `.mcp.json` inside the plugin directory — same format as a project `.mcp.json`. The MCP server is activated when the plugin is installed, so users don't need to run `add-mcp` separately.
 
+The endpoint is not hardcoded: the plugin declares a `userConfig.mcp_url` option (default `https://api.opentrace.ai/mcp/v1/`) in `plugin.json`, and `.mcp.json` references it as `"url": "${user_config.mcp_url}"`. Claude Code prompts for the value at enable time and stores it per-user, so a user on a different OpenTrace host overrides it through the plugin config UI rather than editing files. (`${...}` substitution reads from user/managed settings, not project settings — it's a per-user setting.)
+
 ### Distribution
 
 The plugin ships through the OpenTrace **marketplace** — `.claude-plugin/marketplace.json` at this repo's root lists the `opentrace` plugin (`source: ./plugins/claude-code`). Claude Code resolves the marketplace from the GitHub repo `opentrace/opentrace-cli`.

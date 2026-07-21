@@ -14,5 +14,13 @@
     "knowledge-graph",
     "code-graph",
     "dependencies"
-  ]
+  ],
+  "userConfig": {
+    "mcp_url": {
+      "type": "string",
+      "title": "OpenTrace MCP endpoint",
+      "description": "OpenTrace MCP endpoint URL. Must end in /mcp/v1/. Leave as the default unless you are pointing at a different OpenTrace host.",
+      "default": "https://api.opentrace.ai/mcp/v1/"
+    }
+  }
 }
