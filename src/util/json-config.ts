@@ -15,7 +15,15 @@ export function readJsonConfig<T extends object>(filePath: string, defaults: T):
   }
 }
 
-export function writeJsonConfig(filePath: string, config: unknown): void {
+export function writeJsonConfig(filePath: string, config: unknown, opts?: { secret?: boolean }): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   fs.writeFileSync(filePath, JSON.stringify(config, null, 4) + "\n", "utf8")
+  // Files that embed an API key are locked to the owner. chmod is a no-op on Windows.
+  if (opts?.secret) {
+    try {
+      fs.chmodSync(filePath, 0o600)
+    } catch {
+      /* best-effort; unsupported on some platforms/filesystems */
+    }
+  }
 }

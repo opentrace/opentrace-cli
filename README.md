@@ -6,7 +6,7 @@ CLI for setting up and managing OpenTrace integrations. Ships two binaries — `
 
 ```bash
 # Run once with npx (no install needed)
-npx @opentrace/cli connect
+npx @opentrace/cli connect otk_your_api_key
 
 # Or install globally (adds both `opentrace` and `otx`)
 npm install -g @opentrace/cli
@@ -15,89 +15,92 @@ npm install -g @opentrace/cli
 ## Quick start
 
 ```bash
-# Onboard every AI tool detected on this machine
-otx connect
+# Connect a client to OpenTrace with your API key
+otx connect otk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-`connect` auto-detects your installed AI tools, registers the OpenTrace MCP server for each, and — where the tool supports it (currently Claude Code) — enables the OpenTrace plugin. Afterwards, open Claude Code, run `/mcp`, and sign in to OpenTrace to authorize the connection.
+This validates the key against the OpenTrace MCP endpoint, then wires your client (Claude Code by default) to talk to OpenTrace with **tenant-global** reach — every environment and workspace the key's owner can see. Restart the client, and the model can discover workspaces and operate on any of them.
 
 ## Commands
 
-### `otx connect [path]` (alias: `opentrace install`)
+### `otx connect otk_<key> [--url <host>] [--client <id>]`
 
-Onboards OpenTrace for all detected AI tools (or specific ones). Registers the MCP server everywhere, and installs the Claude Code plugin where supported. Defaults to the current directory.
+Connects a client to the OpenTrace global MCP endpoint using an API key. The key (format `otk_` + 43 characters) is issued from the OpenTrace dashboard.
 
 ```bash
-# Detect installed tools and onboard all of them
-otx connect
+# Default client (Claude Code)
+otx connect otk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-# Onboard a specific tool only
-otx connect --claude-code
-otx connect --cursor
+# A specific client
+otx connect otk_… --client claude-desktop
+otx connect otk_… --client cursor
 
-# Target a specific repo, no prompts
-otx connect /path/to/repo -y
-
-# User-level (all projects) instead of this project
-otx connect --global
+# A non-default API host
+otx connect otk_… --url https://api.example.opentrace.ai
 ```
 
 **Options:**
 
 | Flag | Description |
 |------|-------------|
-| `--base-url <url>` | API base URL (default: `https://api.opentrace.ai`) |
-| `-y, --yes` | Skip confirmation prompts |
-| `-g, --global` | Install to user-level config instead of project-level |
-| `--claude-code`, `--cursor`, `--windsurf`, `--vscode`, `--continue`, `--zed`, `--jetbrains` | Target specific tools instead of auto-detecting |
+| `--url <url>` | MCP endpoint host (default: the OpenTrace production host). Normalized to end in `/mcp/v1/`. |
+| `--client <id>` | Target client: `claude-code` (default), `claude-desktop`, or `cursor` |
+
+What it does: validates the key shape locally, confirms it with an MCP handshake against the endpoint (invalid/expired/revoked keys are rejected before anything is written), writes the client's MCP config with the `Authorization: Bearer` header, and stores the key in your OS keychain. The key is never printed.
+
+### `otx connect [path]` / `otx install [path]`
+
+When `connect` is given a path (or nothing) instead of a key, it runs editor onboarding: registers the MCP server for all detected AI tools and installs the Claude Code plugin where supported. `install` is the same flow.
+
+```bash
+otx connect                 # detect installed tools, onboard all
+otx install --claude-code   # a specific tool
+otx install /path/to/repo -y
+otx install --global        # user-level instead of project-level
+```
+
+**Options:** `--base-url <url>`, `-y, --yes`, `-g, --global`, and per-tool flags (`--claude-code`, `--cursor`, `--windsurf`, `--vscode`, `--continue`, `--zed`, `--jetbrains`).
 
 ### `otx add-mcp [path]`
 
-Adds only the OpenTrace MCP server to a Claude Code project's `.mcp.json`, without the plugin. Defaults to the current directory.
+Adds only the OpenTrace MCP server to a Claude Code project's `.mcp.json` (no plugin, no key). Defaults to the current directory.
 
-```bash
-otx add-mcp
-otx add-mcp /path/to/repo
-```
-
-**Options:**
-
-| Flag | Description |
-|------|-------------|
-| `--base-url <url>` | API base URL (default: `https://api.opentrace.ai`) |
-| `-y, --yes` | Skip confirmation prompts |
+**Options:** `--base-url <url>`, `-y, --yes`.
 
 ## What it writes
 
-**MCP server** — merged into each tool's MCP config (creating the file if needed), leaving existing servers untouched. For Claude Code that's `.mcp.json` (project) or `~/.claude/mcp.json` (`--global`):
+### API-key flow (`connect otk_…`)
 
-```json
-{
-  "mcpServers": {
-    "opentrace": {
-      "type": "http",
-      "url": "https://api.opentrace.ai/mcp/v1/"
-    }
-  }
-}
-```
+The bearer key goes into a **user-scoped** config file in your home directory (never a committed project file), locked to `0600`, plus your OS keychain.
 
-**Claude Code plugin** — declared in `.claude/settings.json` (project) or `~/.claude/settings.json` (`--global`) via the OpenTrace marketplace. Existing settings are preserved and the change is idempotent:
+- **Claude Code** — `~/.claude.json`, native HTTP transport with headers:
+  ```json
+  { "mcpServers": { "opentrace": {
+    "type": "http",
+    "url": "https://<host>/mcp/v1/",
+    "headers": { "Authorization": "Bearer otk_…" }
+  } } }
+  ```
+- **Cursor** — `~/.cursor/mcp.json`, same shape (no `type` needed).
+- **Claude Desktop** — `claude_desktop_config.json`. Desktop has no native remote-HTTP-with-headers support, so otx wires it through the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) stdio bridge (needs Node.js/npx):
+  ```json
+  { "mcpServers": { "opentrace": {
+    "command": "npx",
+    "args": ["-y", "mcp-remote", "https://<host>/mcp/v1/", "--header", "Authorization: Bearer otk_…"]
+  } } }
+  ```
 
-```json
-{
-  "extraKnownMarketplaces": {
-    "opentrace": { "source": { "source": "github", "repo": "opentrace/opentrace-cli" } }
-  },
-  "enabledPlugins": ["opentrace@opentrace"]
-}
-```
+### Editor onboarding (`connect <path>` / `install`)
 
-When you next open (and trust) the folder, Claude Code prompts to install the plugin; accept it and run `/reload-plugins`.
+- **MCP server** — merged into each tool's MCP config (no auth header; the plugin/editor handles OAuth). For Claude Code, `.mcp.json` (project) or `~/.claude/mcp.json` (`--global`).
+- **Claude Code plugin** — declared idempotently in `.claude/settings.json` via `extraKnownMarketplaces` + `enabledPlugins`; Claude Code prompts to install when you trust the folder.
 
 ## Authentication
 
-OpenTrace authenticates over OAuth, handled by the AI tool itself — the CLI never stores tokens or API keys. After onboarding, run `/mcp` in Claude Code and sign in to OpenTrace to authorize the connection.
+Two models, depending on how you connect:
+
+- **API key** (`connect otk_…`) — a `otk_` bearer key sent on every request, granting tenant-global reach. The key works against the MCP endpoint only; the CLI validates it via an MCP handshake (not a REST call). Keys can expire or be revoked — if calls start returning `401`, reconnect with a fresh key.
+- **OAuth** (editor onboarding / plugin) — the AI tool performs the OAuth handshake against the MCP endpoint itself; the CLI stores no token. Run `/mcp` in Claude Code and sign in.
 
 ## License
 
