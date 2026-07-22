@@ -1,5 +1,5 @@
 import path from "node:path"
-import { checkbox, confirm } from "@inquirer/prompts"
+import { select, checkbox, confirm } from "@inquirer/prompts"
 import { ALL_INTEGRATIONS } from "../util/detect.js"
 import { KEY_CLIENTS } from "../key-clients/index.js"
 import { SERVER_KEY, DEFAULT_BASE_URL, normalizeMcpUrl } from "../util/constants.js"
@@ -83,15 +83,18 @@ async function resolveComponents(opts: DisconnectOptions): Promise<Component[]> 
 
   if (!process.stdin.isTTY || opts.yes) return ["mcp", "plugin", "keychain"]
 
-  const chosen = await checkbox<Component>({
+  // Single-select with an explicit "everything" option — a pre-checked multi-select
+  // reads as "highlight to pick", so users submit all three by accident.
+  const choice = await select<Component | "all">({
     message: "What should otx disconnect?",
     choices: [
-      { name: "MCP server entries", value: "mcp", checked: true },
-      { name: "Claude Code plugin", value: "plugin", checked: true },
-      { name: "API key in the OS keychain", value: "keychain", checked: true },
+      { name: "Everything (MCP entries + plugin + keychain key)", value: "all" },
+      { name: "MCP server entries only", value: "mcp" },
+      { name: "Claude Code plugin only", value: "plugin" },
+      { name: "API key in the OS keychain only", value: "keychain" },
     ],
   })
-  return chosen
+  return choice === "all" ? ["mcp", "plugin", "keychain"] : [choice]
 }
 
 export async function disconnect(targetPath: string, opts: DisconnectOptions): Promise<void> {
