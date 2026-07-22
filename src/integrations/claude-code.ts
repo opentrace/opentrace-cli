@@ -2,6 +2,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { readJsonConfig, writeJsonConfig, removeJsonEntry } from "../util/json-config.js"
+import { clearPluginToken } from "../util/plugin-token.js"
 import {
   SERVER_KEY,
   buildMcpUrl,
@@ -86,6 +87,24 @@ function clearPluginConfig(): boolean {
   }
 }
 
+/** Strip the marketplace + enabledPlugins declaration from one settings file. Returns true if it changed. */
+function stripDeclaration(configPath: string): boolean {
+  if (!fs.existsSync(configPath)) return false
+  try {
+    const settings = readJsonConfig<ClaudeSettings>(configPath, { extraKnownMarketplaces: {}, enabledPlugins: {} })
+    const enabled = normalizePlugins(settings)
+    const id = pluginId()
+    if (!(MARKETPLACE_NAME in settings.extraKnownMarketplaces) && !(id in enabled)) return false
+    delete settings.extraKnownMarketplaces[MARKETPLACE_NAME]
+    delete enabled[id]
+    settings.enabledPlugins = enabled
+    writeJsonConfig(configPath, settings)
+    return true
+  } catch {
+    return false
+  }
+}
+
 // Declarative plugin onboarding: write extraKnownMarketplaces + enabledPlugins into
 // Claude Code settings.json. Matches how we register MCP (config-file writes, no `claude`
 // binary required). Claude Code prompts the user to install once they trust the folder.
@@ -142,28 +161,18 @@ const plugin: PluginCapability = {
     return { configPath: writePluginMcpUrl(mcpUrl) }
   },
 
-  remove(projectDir, opts): RemoveResult {
-    const configPath = this.getConfigPath(projectDir, opts)
+  // Scope-complete: clears the declaration from both the project file and user
+  // settings, plus the user-scoped pluginConfigs (mcp_url) and the API-key token
+  // file. Idempotent; `opts` is accepted for interface parity but unused.
+  remove(projectDir, _opts): RemoveResult {
+    const projectPath = this.getConfigPath(projectDir, { global: false })
+    const userPath = this.getConfigPath(projectDir, { global: true })
     let removed = false
-    if (fs.existsSync(configPath)) {
-      try {
-        const settings = readJsonConfig<ClaudeSettings>(configPath, { extraKnownMarketplaces: {}, enabledPlugins: {} })
-        const enabled = normalizePlugins(settings)
-        const id = pluginId()
-        if (MARKETPLACE_NAME in settings.extraKnownMarketplaces || id in enabled) {
-          delete settings.extraKnownMarketplaces[MARKETPLACE_NAME]
-          delete enabled[id]
-          settings.enabledPlugins = enabled
-          writeJsonConfig(configPath, settings)
-          removed = true
-        }
-      } catch {
-        /* leave removed as-is */
-      }
-    }
-    // Also drop the injected mcp_url from user-scoped pluginConfigs.
-    if (clearPluginConfig()) removed = true
-    return { configPath, removed }
+    if (stripDeclaration(projectPath)) removed = true
+    if (userPath !== projectPath && stripDeclaration(userPath)) removed = true
+    if (clearPluginConfig()) removed = true // pluginConfigs.mcp_url in user settings
+    if (clearPluginToken()) removed = true // ~/.claude/opentrace-plugin.token
+    return { configPath: userPath, removed }
   },
 }
 

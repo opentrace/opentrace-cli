@@ -1,8 +1,11 @@
+import os from "node:os"
 import { normalizeMcpUrl, DEFAULT_BASE_URL } from "../util/constants.js"
 import { validateTokenShape, maskToken } from "../util/token.js"
 import { probeMcp } from "../util/mcp-probe.js"
 import { storeToken, KeychainUnavailableError } from "../util/keychain.js"
+import { writePluginToken } from "../util/plugin-token.js"
 import { findKeyClient, detectKeyClients, KEY_CLIENTS, DEFAULT_KEY_CLIENT } from "../key-clients/index.js"
+import claudeCode from "../integrations/claude-code.js"
 
 interface ConnectKeyOptions {
   url?: string
@@ -60,7 +63,42 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     process.exit(1) // nothing written
   }
 
-  // 5. Write the client config (the header is what authenticates requests).
+  const hasDiscovery = DISCOVERY_TOOLS.some((t) => probe.tools.includes(t))
+  const reachLine = `  Reach:     tenant-global — every environment and workspace this key can see (${probe.tools.length} MCP tools available).`
+
+  // 5a. Claude Code: the plugin supersedes a bare MCP entry, so attach the key to
+  //     the plugin — seed its mcp_url and drop the key in the headersHelper token
+  //     file. No direct ~/.claude.json header, no keychain (the token file is the
+  //     plugin's source of truth; `disconnect --plugin` clears it).
+  if (clientId === "claude-code") {
+    if (!claudeCode.plugin) {
+      console.error("\nClaude Code plugin capability is unavailable.")
+      process.exit(1)
+    }
+    let settingsPath: string
+    let tokenPath: string
+    try {
+      settingsPath = claudeCode.plugin.install(os.homedir(), { global: true }).configPath
+      claudeCode.plugin.setMcpUrl(mcpUrl)
+      tokenPath = writePluginToken(token)
+    } catch (err) {
+      console.error(`\nFailed to configure the Claude Code plugin: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+    console.log()
+    console.log(`✓ Connected Claude Code (plugin) to OpenTrace (${maskToken(token)})`)
+    console.log(`  Endpoint:  ${mcpUrl}`)
+    console.log(`  Plugin:    ${settingsPath}`)
+    console.log(`  Key file:  ${tokenPath} (0600)`)
+    console.log(reachLine)
+    if (hasDiscovery) console.log(`  Start with ${DISCOVERY_TOOLS.join(" / ")} to discover, then target any workspace.`)
+    console.log()
+    console.log("Restart Claude Code (or /reload-plugins) to activate — the plugin authenticates with your API key.")
+    console.log("Heads up: API keys can expire or be revoked — if calls start returning 401, reconnect with a fresh key.")
+    return
+  }
+
+  // 5b. Cursor / Claude Desktop: write the MCP entry with the bearer header directly.
   let note: string | undefined
   let configPath: string
   try {
@@ -88,13 +126,12 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
   }
 
   // 7. Report success — tenant-global, token masked.
-  const hasDiscovery = DISCOVERY_TOOLS.some((t) => probe.tools.includes(t))
   console.log()
   console.log(`✓ Connected ${client.label} to OpenTrace (${maskToken(token)})`)
   console.log(`  Endpoint:  ${mcpUrl}`)
   console.log(`  Config:    ${configPath}`)
   if (keychainStored) console.log("  Key saved to the OS keychain.")
-  console.log(`  Reach:     tenant-global — every environment and workspace this key can see (${probe.tools.length} MCP tools available).`)
+  console.log(reachLine)
   if (hasDiscovery) {
     console.log(`  Start with ${DISCOVERY_TOOLS.join(" / ")} to discover, then target any workspace.`)
   }

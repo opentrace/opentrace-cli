@@ -46,7 +46,12 @@ otx connect otk_… --url https://api.example.opentrace.ai
 | `--url <url>` | MCP endpoint host (default: the OpenTrace production host). Normalized to end in `/mcp/v1/`. |
 | `--client <id>` | Target client: `claude-code` (default), `claude-desktop`, or `cursor` |
 
-What it does: validates the key shape locally, confirms it with an MCP handshake against the endpoint (invalid/expired/revoked keys are rejected before anything is written), writes the client's MCP config with the `Authorization: Bearer` header, and stores the key in your OS keychain. The key is never printed.
+What it does: validates the key shape locally, then confirms it with an MCP handshake against the endpoint (invalid/expired/revoked keys are rejected before anything is written). Then, per client:
+
+- **Claude Code** → installs the **plugin** (which supersedes a bare MCP entry) and attaches the key to it: seeds the plugin's `mcp_url` and writes the key to `~/.claude/opentrace-plugin.token` (0600), which the plugin's `headersHelper` reads to send `Authorization: Bearer …`. No direct `~/.claude.json` entry.
+- **Cursor / Claude Desktop** → writes the MCP entry with the `Authorization: Bearer` header directly, and stores the key in your OS keychain.
+
+The key is never printed. (Undo: `otx disconnect --plugin` for Claude Code, or `otx disconnect --mcp --keychain --client cursor` for the others.)
 
 ### `otx connect [path]` / `otx install [path]`
 
@@ -96,18 +101,21 @@ It removes the OpenTrace entry from each client config it finds, drops the plugi
 
 ### API-key flow (`connect otk_…`)
 
-The bearer key goes into a **user-scoped** config file in your home directory (never a committed project file), locked to `0600`, plus your OS keychain.
+The bearer key goes into a **user-scoped** file in your home directory (never a committed project file), locked to `0600`.
 
-- **Claude Code** — `~/.claude.json`, native HTTP transport with headers:
+- **Claude Code** — installs the plugin and attaches the key. The endpoint is seeded as the plugin's `mcp_url` (`pluginConfigs` in `~/.claude/settings.json`) and the key is written to `~/.claude/opentrace-plugin.token`. The plugin's `.mcp.json` carries a `headersHelper` (`bin/auth-headers.cjs`) that emits `Authorization: Bearer <key>` when that file exists, and nothing (→ OAuth) when it doesn't:
   ```json
   { "mcpServers": { "opentrace": {
     "type": "http",
-    "url": "https://<host>/mcp/v1/",
-    "headers": { "Authorization": "Bearer otk_…" }
+    "url": "${user_config.mcp_url}",
+    "headersHelper": "node \"${CLAUDE_PLUGIN_ROOT}/bin/auth-headers.cjs\""
   } } }
   ```
-- **Cursor** — `~/.cursor/mcp.json`, same shape (no `type` needed).
-- **Claude Desktop** — `claude_desktop_config.json`. Desktop has no native remote-HTTP-with-headers support, so otx wires it through the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) stdio bridge (needs Node.js/npx):
+- **Cursor** — `~/.cursor/mcp.json`, direct header entry + OS keychain:
+  ```json
+  { "mcpServers": { "opentrace": { "url": "https://<host>/mcp/v1/", "headers": { "Authorization": "Bearer otk_…" } } } }
+  ```
+- **Claude Desktop** — `claude_desktop_config.json`. Desktop has no native remote-HTTP-with-headers support, so otx wires it through the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) stdio bridge (needs Node.js/npx), + OS keychain:
   ```json
   { "mcpServers": { "opentrace": {
     "command": "npx",
@@ -123,10 +131,12 @@ The bearer key goes into a **user-scoped** config file in your home directory (n
 
 ## Authentication
 
-Two models, depending on how you connect:
+Two models:
 
 - **API key** (`connect otk_…`) — a `otk_` bearer key sent on every request, granting tenant-global reach. The key works against the MCP endpoint only; the CLI validates it via an MCP handshake (not a REST call). Keys can expire or be revoked — if calls start returning `401`, reconnect with a fresh key.
-- **OAuth** (editor onboarding / plugin) — the AI tool performs the OAuth handshake against the MCP endpoint itself; the CLI stores no token. Run `/mcp` in Claude Code and sign in.
+- **OAuth** (`install` / `connect <path>` with no key) — the AI tool performs the OAuth handshake against the MCP endpoint itself; the CLI stores no token. Run `/mcp` in Claude Code and sign in.
+
+The **Claude Code plugin supports both**: `otx install` sets it up for OAuth, while `otx connect otk_… --client claude-code` attaches an API key to the same plugin (via its `headersHelper`). With a key present the plugin authenticates by header; without one it uses OAuth.
 
 ## License
 

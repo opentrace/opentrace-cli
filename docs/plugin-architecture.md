@@ -87,6 +87,8 @@ Search the indexed codebase using OpenTrace. Use the `opentrace` MCP tools to...
 
 The endpoint is not hardcoded: the plugin declares a `userConfig.mcp_url` option (default `https://api.opentrace.ai/mcp/v1/`) in `plugin.json`, and `.mcp.json` references it as `"url": "${user_config.mcp_url}"`. Claude Code prompts for the value at enable time and stores it per-user, so a user on a different OpenTrace host overrides it through the plugin config UI rather than editing files. (`${...}` substitution reads from user/managed settings, not project settings — it's a per-user setting.) `otx install --url <host>` pre-seeds this by writing `pluginConfigs["opentrace@opentrace"].options.mcp_url` into `~/.claude/settings.json`, so the plugin uses that endpoint without prompting.
 
+**API-key auth (optional).** The server entry also declares a `headersHelper` (`node "${CLAUDE_PLUGIN_ROOT}/bin/auth-headers.cjs"`). That script reads `~/.claude/opentrace-plugin.token` and, if present, emits `{"Authorization":"Bearer <key>"}`; if absent, it emits `{}` so Claude Code authenticates the server over OAuth. `otx connect otk_… --client claude-code` writes that token file (and seeds `mcp_url`), so the same plugin works with an API key or OAuth without a second server entry. A `headersHelper` can't read `${user_config.*}`, which is why the key lives in a file rather than a `sensitive` userConfig.
+
 ### Distribution
 
 The plugin ships through the OpenTrace **marketplace** — `.claude-plugin/marketplace.json` at this repo's root lists the `opentrace` plugin (`source: ./plugins/claude-code`). Claude Code resolves the marketplace from the GitHub repo `opentrace/opentrace-cli`.

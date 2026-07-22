@@ -148,18 +148,15 @@ export async function disconnect(targetPath: string, opts: DisconnectOptions): P
 
   // ---- Plugin ----
   if (components.includes("plugin") && claudeCode.plugin) {
-    const scopes = isGlobal ? [false, true] : [false]
-    let any = false
-    for (const g of scopes) {
-      const r = claudeCode.plugin.remove(dir, { global: g })
-      if (r.removed) {
-        any = true
-        didSomething = true
-        console.log(`  ✓ removed plugin declaration     ${r.configPath}`)
-      }
+    // remove() is scope-complete: project + user declaration, pluginConfigs, and the key file.
+    const r = claudeCode.plugin.remove(dir, { global: isGlobal })
+    if (r.removed) {
+      didSomething = true
+      console.log("  ✓ removed OpenTrace plugin (declaration, mcp_url, API-key file)")
+      console.log("    (also run `claude plugin uninstall opentrace@opentrace` to drop the installed plugin cache)")
+    } else {
+      console.log("No OpenTrace plugin declaration found.")
     }
-    if (!any) console.log("No OpenTrace plugin declaration found.")
-    else console.log("    (also run `claude plugin uninstall opentrace@opentrace` to drop the installed plugin cache)")
   }
 
   // ---- Keychain ----
