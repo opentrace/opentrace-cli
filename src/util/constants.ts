@@ -15,6 +15,11 @@ export function normalizeMcpUrl(input: string): string {
   return `${trimmed}/mcp/v1/`
 }
 
+/** Reduce a base-or-full URL to the host base (no trailing slash, no /mcp/v1 suffix). */
+export function toBaseUrl(input: string): string {
+  return input.trim().replace(/\/+$/, "").replace(/\/mcp\/v1$/, "")
+}
+
 // Claude Code plugin distribution (declarative marketplace onboarding).
 // The marketplace manifest lives at .claude-plugin/marketplace.json in this repo.
 export const MARKETPLACE_NAME = "opentrace"

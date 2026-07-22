@@ -37,7 +37,12 @@ export interface PluginCapability {
   isEnabled(projectDir: string, opts: Pick<InstallOptions, "global">): boolean
   /** Declare the marketplace and enable the plugin, merging into existing settings */
   install(projectDir: string, opts: Pick<InstallOptions, "global">): PluginInstallResult
-  /** Remove the marketplace + plugin declaration from the settings file */
+  /**
+   * Pre-seed the plugin's `mcp_url` userConfig so its bundled MCP targets `mcpUrl`.
+   * Written to USER settings, since Claude Code reads pluginConfigs from there only.
+   */
+  setMcpUrl(mcpUrl: string): { configPath: string }
+  /** Remove the marketplace + plugin declaration (and any pluginConfigs) from settings */
   remove(projectDir: string, opts: Pick<InstallOptions, "global">): RemoveResult
 }
 

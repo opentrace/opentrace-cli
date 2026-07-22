@@ -85,7 +85,7 @@ Search the indexed codebase using OpenTrace. Use the `opentrace` MCP tools to...
 
 `.mcp.json` inside the plugin directory — same format as a project `.mcp.json`. The MCP server is activated when the plugin is installed, so users don't need to run `add-mcp` separately.
 
-The endpoint is not hardcoded: the plugin declares a `userConfig.mcp_url` option (default `https://api.opentrace.ai/mcp/v1/`) in `plugin.json`, and `.mcp.json` references it as `"url": "${user_config.mcp_url}"`. Claude Code prompts for the value at enable time and stores it per-user, so a user on a different OpenTrace host overrides it through the plugin config UI rather than editing files. (`${...}` substitution reads from user/managed settings, not project settings — it's a per-user setting.)
+The endpoint is not hardcoded: the plugin declares a `userConfig.mcp_url` option (default `https://api.opentrace.ai/mcp/v1/`) in `plugin.json`, and `.mcp.json` references it as `"url": "${user_config.mcp_url}"`. Claude Code prompts for the value at enable time and stores it per-user, so a user on a different OpenTrace host overrides it through the plugin config UI rather than editing files. (`${...}` substitution reads from user/managed settings, not project settings — it's a per-user setting.) `otx install --url <host>` pre-seeds this by writing `pluginConfigs["opentrace@opentrace"].options.mcp_url` into `~/.claude/settings.json`, so the plugin uses that endpoint without prompting.
 
 ### Distribution
 
@@ -269,7 +269,7 @@ The CLI is the control plane: it installs the MCP server for every detected tool
 npx @opentrace/cli connect
 
 # Specific tools
-otx connect --claude-code    # writes .mcp.json + declares the plugin in .claude/settings.json
+otx connect --claude-code    # declares the plugin in .claude/settings.json (no .mcp.json — the plugin supersedes it)
 otx connect --cursor         # writes .cursor/mcp.json (MCP only)
 otx connect --vscode         # writes .vscode/mcp.json (MCP only)
 otx connect --windsurf       # writes ~/.codeium/windsurf/mcp_config.json (MCP only)

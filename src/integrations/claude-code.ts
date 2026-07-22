@@ -46,6 +46,46 @@ function normalizePlugins(settings: ClaudeSettings): Record<string, boolean> {
   return ep ?? {}
 }
 
+// pluginConfigs (userConfig values, e.g. mcp_url) is read from USER settings only —
+// project-scoped pluginConfigs is ignored by Claude Code — so it always lives here.
+interface UserSettings {
+  pluginConfigs?: Record<string, { options?: Record<string, string | number | boolean>; mcpServers?: Record<string, unknown> }>
+  [key: string]: unknown
+}
+
+function userSettingsPath(): string {
+  return path.join(os.homedir(), ".claude", "settings.json")
+}
+
+/** Seed the plugin's mcp_url userConfig value in user settings; returns the file written. */
+function writePluginMcpUrl(mcpUrl: string): string {
+  const configPath = userSettingsPath()
+  const settings = readJsonConfig<UserSettings>(configPath, {})
+  const id = pluginId()
+  const pluginConfigs = settings.pluginConfigs ?? {}
+  const existing = pluginConfigs[id] ?? {}
+  pluginConfigs[id] = { ...existing, options: { ...(existing.options ?? {}), mcp_url: mcpUrl } }
+  settings.pluginConfigs = pluginConfigs
+  writeJsonConfig(configPath, settings)
+  return configPath
+}
+
+/** Drop the plugin's entry from user-settings pluginConfigs. Returns true if anything changed. */
+function clearPluginConfig(): boolean {
+  const configPath = userSettingsPath()
+  if (!fs.existsSync(configPath)) return false
+  try {
+    const settings = readJsonConfig<UserSettings>(configPath, {})
+    const id = pluginId()
+    if (!settings.pluginConfigs || !(id in settings.pluginConfigs)) return false
+    delete settings.pluginConfigs[id]
+    writeJsonConfig(configPath, settings)
+    return true
+  } catch {
+    return false
+  }
+}
+
 // Declarative plugin onboarding: write extraKnownMarketplaces + enabledPlugins into
 // Claude Code settings.json. Matches how we register MCP (config-file writes, no `claude`
 // binary required). Claude Code prompts the user to install once they trust the folder.
@@ -98,24 +138,32 @@ const plugin: PluginCapability = {
     return { configPath, alreadyEnabled }
   },
 
+  setMcpUrl(mcpUrl): { configPath: string } {
+    return { configPath: writePluginMcpUrl(mcpUrl) }
+  },
+
   remove(projectDir, opts): RemoveResult {
     const configPath = this.getConfigPath(projectDir, opts)
-    if (!fs.existsSync(configPath)) return { configPath, removed: false }
-    let settings: ClaudeSettings
-    try {
-      settings = readJsonConfig<ClaudeSettings>(configPath, { extraKnownMarketplaces: {}, enabledPlugins: {} })
-    } catch {
-      return { configPath, removed: false }
+    let removed = false
+    if (fs.existsSync(configPath)) {
+      try {
+        const settings = readJsonConfig<ClaudeSettings>(configPath, { extraKnownMarketplaces: {}, enabledPlugins: {} })
+        const enabled = normalizePlugins(settings)
+        const id = pluginId()
+        if (MARKETPLACE_NAME in settings.extraKnownMarketplaces || id in enabled) {
+          delete settings.extraKnownMarketplaces[MARKETPLACE_NAME]
+          delete enabled[id]
+          settings.enabledPlugins = enabled
+          writeJsonConfig(configPath, settings)
+          removed = true
+        }
+      } catch {
+        /* leave removed as-is */
+      }
     }
-    const enabled = normalizePlugins(settings)
-    const id = pluginId()
-    const had = MARKETPLACE_NAME in settings.extraKnownMarketplaces || id in enabled
-    if (!had) return { configPath, removed: false }
-    delete settings.extraKnownMarketplaces[MARKETPLACE_NAME]
-    delete enabled[id]
-    settings.enabledPlugins = enabled
-    writeJsonConfig(configPath, settings)
-    return { configPath, removed: true }
+    // Also drop the injected mcp_url from user-scoped pluginConfigs.
+    if (clearPluginConfig()) removed = true
+    return { configPath, removed }
   },
 }
 

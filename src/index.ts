@@ -5,7 +5,7 @@ import { install } from "./commands/install.js"
 import { connectWithKey } from "./commands/connect.js"
 import { disconnect } from "./commands/disconnect.js"
 import { ALL_INTEGRATIONS } from "./util/detect.js"
-import { DEFAULT_BASE_URL } from "./util/constants.js"
+import { DEFAULT_BASE_URL, toBaseUrl, buildMcpUrl } from "./util/constants.js"
 import { looksLikeToken } from "./util/token.js"
 
 const program = new Command()
@@ -28,12 +28,24 @@ program
 function addInstallOptions(cmd: Command): Command {
   cmd
     .option("--base-url <url>", "OpenTrace API base URL", DEFAULT_BASE_URL)
+    .option("--url <url>", "OpenTrace MCP endpoint (overrides --base-url; fed to the plugin's mcp_url)")
     .option("-y, --yes", "Skip confirmation prompts")
     .option("-g, --global", "Install to user-level config instead of project-level")
   ALL_INTEGRATIONS.forEach((i) => {
     cmd.option(`--${i.id}`, `${i.label}: ${i.helpText}`)
   })
   return cmd
+}
+
+/**
+ * Resolve the onboarding endpoint. Returns the host base (for direct MCP entries)
+ * and, when a URL was explicitly given, the full MCP URL to inject into the plugin.
+ */
+function resolveEndpoint(opts: { url?: string; baseUrl?: string }): { baseUrl: string; pluginUrl?: string } {
+  const explicit =
+    opts.url ?? (opts.baseUrl && opts.baseUrl !== DEFAULT_BASE_URL ? opts.baseUrl : undefined)
+  const base = toBaseUrl(explicit ?? opts.baseUrl ?? DEFAULT_BASE_URL)
+  return { baseUrl: base, pluginUrl: explicit ? buildMcpUrl(base) : undefined }
 }
 
 const installCmd = addInstallOptions(
@@ -43,8 +55,10 @@ const installCmd = addInstallOptions(
 )
 
 installCmd.action(async (targetPath: string | undefined, opts) => {
+  const { baseUrl, pluginUrl } = resolveEndpoint(opts)
   await install(targetPath ?? ".", {
-    baseUrl: opts.baseUrl,
+    baseUrl,
+    pluginUrl,
     yes: opts.yes,
     global: opts.global,
     toolOpts: opts as Record<string, unknown>,
@@ -60,15 +74,16 @@ const connectCmd = addInstallOptions(
     .description("Connect a client to OpenTrace with an API key (otk_…), or onboard editors when given a path"),
 )
 connectCmd
-  .option("--url <url>", "MCP endpoint host for the API-key flow (default: the OpenTrace production host)")
   .option("--client <id>", "Target client for the API-key flow: claude-code | claude-desktop | cursor")
   .action(async (tokenOrPath: string | undefined, opts) => {
     if (tokenOrPath && looksLikeToken(tokenOrPath)) {
       await connectWithKey(tokenOrPath, { url: opts.url, client: opts.client })
       return
     }
+    const { baseUrl, pluginUrl } = resolveEndpoint(opts)
     await install(tokenOrPath ?? ".", {
-      baseUrl: opts.baseUrl,
+      baseUrl,
+      pluginUrl,
       yes: opts.yes,
       global: opts.global,
       toolOpts: opts as Record<string, unknown>,

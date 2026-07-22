@@ -7,6 +7,8 @@ import type { Integration } from "../integrations/types.js"
 
 interface InstallCommandOptions {
   baseUrl?: string
+  /** Full MCP URL to inject into the plugin's userConfig; set only when a URL was explicitly given. */
+  pluginUrl?: string
   yes?: boolean
   global?: boolean
   toolOpts?: Record<string, unknown>
@@ -53,7 +55,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     const labels = targets.map((i) => i.label).join(", ")
     if (!opts.yes) {
       const go = await confirm({
-        message: `Detected: ${labels}. Install OpenTrace MCP for all?`,
+        message: `Detected: ${labels}. Set up OpenTrace for all?`,
         default: true,
       })
       if (!go) {
@@ -68,10 +70,17 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   let pluginInstalled = false
 
   for (const integration of targets) {
-    const alreadyPresent = integration.hasEntry(dir, { global: isGlobal })
+    // Where a plugin is available (Claude Code) it supersedes the bare MCP entry —
+    // the plugin bundles its own MCP, so writing .mcp.json too would be redundant.
+    const plugin = integration.plugin
+    const present = plugin
+      ? plugin.isEnabled(dir, { global: isGlobal })
+      : integration.hasEntry(dir, { global: isGlobal })
 
-    if (alreadyPresent && !opts.yes) {
-      const configPath = integration.getConfigPath(dir, { global: isGlobal })
+    if (present && !opts.yes) {
+      const configPath = plugin
+        ? plugin.getConfigPath(dir, { global: isGlobal })
+        : integration.getConfigPath(dir, { global: isGlobal })
       const overwrite = await confirm({
         message: `${integration.label}: OpenTrace already configured in ${configPath}. Overwrite?`,
         default: false,
@@ -83,24 +92,25 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     }
 
     try {
-      const result = integration.install(dir, { baseUrl, global: isGlobal })
-      results.push({
-        label: integration.label,
-        configPath: result.configPath,
-        status: result.existed ? "updated" : "added",
-      })
-
-      // Control plane: install the plugin only where the target supports one.
-      // Everything else gets MCP alone.
-      if (integration.plugin) {
-        try {
-          const pluginResult = integration.plugin.install(dir, { global: isGlobal })
-          pluginInstalled = true
-          const verb = pluginResult.alreadyEnabled ? "-" : "✓"
-          console.log(`  ${verb} ${integration.label} plugin  ${pluginResult.configPath}`)
-        } catch (err) {
-          console.error(`  ${integration.label} plugin: failed — ${err instanceof Error ? err.message : String(err)}`)
+      if (plugin) {
+        const pr = plugin.install(dir, { global: isGlobal })
+        pluginInstalled = true
+        results.push({
+          label: `${integration.label} (plugin)`,
+          configPath: pr.configPath,
+          status: pr.alreadyEnabled ? "updated" : "added",
+        })
+        if (opts.pluginUrl) {
+          const ur = plugin.setMcpUrl(opts.pluginUrl)
+          console.log(`  ↳ plugin endpoint → ${opts.pluginUrl}  (${ur.configPath})`)
         }
+      } else {
+        const r = integration.install(dir, { baseUrl, global: isGlobal })
+        results.push({
+          label: integration.label,
+          configPath: r.configPath,
+          status: r.existed ? "updated" : "added",
+        })
       }
     } catch (err) {
       console.error(`  ${integration.label}: failed — ${err instanceof Error ? err.message : String(err)}`)
@@ -122,6 +132,9 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     console.log("  1. Restart your AI tools to activate the OpenTrace MCP server.")
     if (pluginInstalled) {
       console.log("     Claude Code will prompt to install the OpenTrace plugin — accept it, then run /reload-plugins.")
+      if (!opts.pluginUrl) {
+        console.log("     (it will also ask for the MCP endpoint — the default is production)")
+      }
     }
     console.log("  2. In Claude Code, run /mcp and sign in to OpenTrace to authorize the connection.")
   }

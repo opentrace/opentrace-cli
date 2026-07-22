@@ -50,7 +50,7 @@ What it does: validates the key shape locally, confirms it with an MCP handshake
 
 ### `otx connect [path]` / `otx install [path]`
 
-When `connect` is given a path (or nothing) instead of a key, it runs editor onboarding: registers the MCP server for all detected AI tools and installs the Claude Code plugin where supported. `install` is the same flow.
+When `connect` is given a path (or nothing) instead of a key, it runs editor onboarding: sets up OpenTrace for all detected AI tools — the Claude Code plugin where supported (which supersedes the bare MCP), a plain MCP entry everywhere else. `install` is the same flow.
 
 ```bash
 otx connect                 # detect installed tools, onboard all
@@ -117,8 +117,9 @@ The bearer key goes into a **user-scoped** config file in your home directory (n
 
 ### Editor onboarding (`connect <path>` / `install`)
 
-- **MCP server** — merged into each tool's MCP config (no auth header; the plugin/editor handles OAuth). For Claude Code, `.mcp.json` (project) or `~/.claude/mcp.json` (`--global`).
-- **Claude Code plugin** — declared idempotently in `.claude/settings.json` via `extraKnownMarketplaces` + `enabledPlugins`; Claude Code prompts to install when you trust the folder. The plugin's MCP endpoint is configurable: Claude Code prompts for `mcp_url` (default `https://api.opentrace.ai/mcp/v1/`) when the plugin is enabled, so you can point it at a different OpenTrace host without editing the plugin.
+- **Claude Code → plugin only.** Where a plugin is available it supersedes the bare MCP entry (the plugin bundles its own MCP), so **no `.mcp.json` is written for Claude Code** — just the plugin declaration (`extraKnownMarketplaces` + `enabledPlugins`) in `.claude/settings.json`. Claude Code prompts to install when you trust the folder. (Want the Claude Code MCP *without* the plugin? Use `add-mcp`.)
+- **Other editors → MCP entry.** Cursor, Windsurf, VS Code, Zed, JetBrains, Continue get the headerless MCP config; auth is the editor's (OAuth).
+- **Endpoint** — pass `--url` (or `--base-url`) to target a non-prod host. For Claude Code it's injected as the plugin's `mcp_url` (written to `pluginConfigs` in `~/.claude/settings.json`, since Claude Code reads plugin config from user settings only); for other editors it's written into the MCP entry. Omit it and the plugin falls back to prompting for `mcp_url` (default `https://api.opentrace.ai/mcp/v1/`) on enable.
 
 ## Authentication
 
