@@ -18,7 +18,7 @@ if printf '%s' "$text" | grep -qiE 'architect|dependenc|upstream|downstream|impa
 {
   "hookSpecificOutput": {
     "hookEventName": "UserPromptSubmit",
-    "additionalContext": "This prompt may concern architecture or dependencies. The OpenTrace MCP tools can help: graph.search finds the component in an indexed workspace graph, graph.explore_focused_subgraph shows its neighborhood, and source.load reads the underlying code. Call workspaces.list first if you do not yet have a workspace_id."
+    "additionalContext": "This prompt may concern architecture or dependencies. The OpenTrace MCP tools can help: graph_search finds the component in an indexed workspace graph, graph_explore_focused_subgraph shows its neighborhood, and source_load reads the underlying code. Call workspaces_list first if you have not yet picked a workspace (then resolve a source_id with graph_resolve_code_source)."
   }
 }
 JSON
