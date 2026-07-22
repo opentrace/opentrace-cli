@@ -30,7 +30,20 @@ interface MarketplaceSource {
 
 interface ClaudeSettings {
   extraKnownMarketplaces: Record<string, { source: MarketplaceSource }>
-  enabledPlugins: string[]
+  // Claude Code expects a record keyed by "plugin@marketplace" → boolean. Older
+  // builds of this CLI wrote a string[]; normalizePlugins() heals that on write.
+  enabledPlugins: Record<string, boolean> | string[]
+}
+
+/** Coerce enabledPlugins to the record form Claude Code expects, repairing a legacy array. */
+function normalizePlugins(settings: ClaudeSettings): Record<string, boolean> {
+  const ep = settings.enabledPlugins
+  if (Array.isArray(ep)) {
+    const rec: Record<string, boolean> = {}
+    for (const id of ep) rec[id] = true
+    return rec
+  }
+  return ep ?? {}
 }
 
 // Declarative plugin onboarding: write extraKnownMarketplaces + enabledPlugins into
@@ -52,11 +65,11 @@ const plugin: PluginCapability = {
     try {
       const settings = readJsonConfig<ClaudeSettings>(configPath, {
         extraKnownMarketplaces: {},
-        enabledPlugins: [],
+        enabledPlugins: {},
       })
       return (
         MARKETPLACE_NAME in settings.extraKnownMarketplaces &&
-        settings.enabledPlugins.includes(pluginId())
+        normalizePlugins(settings)[pluginId()] === true
       )
     } catch {
       return false
@@ -67,18 +80,19 @@ const plugin: PluginCapability = {
     const configPath = this.getConfigPath(projectDir, opts)
     const settings = readJsonConfig<ClaudeSettings>(configPath, {
       extraKnownMarketplaces: {},
-      enabledPlugins: [],
+      enabledPlugins: {},
     })
+    const enabled = normalizePlugins(settings)
 
     const marketplaceKnown = MARKETPLACE_NAME in settings.extraKnownMarketplaces
     const id = pluginId()
-    const pluginKnown = settings.enabledPlugins.includes(id)
-    const alreadyEnabled = marketplaceKnown && pluginKnown
+    const alreadyEnabled = marketplaceKnown && enabled[id] === true
 
     settings.extraKnownMarketplaces[MARKETPLACE_NAME] = {
       source: { source: "github", repo: MARKETPLACE_REPO },
     }
-    if (!pluginKnown) settings.enabledPlugins.push(id)
+    enabled[id] = true
+    settings.enabledPlugins = enabled // always persist the record form (heals a legacy array)
 
     writeJsonConfig(configPath, settings)
     return { configPath, alreadyEnabled }
@@ -89,15 +103,17 @@ const plugin: PluginCapability = {
     if (!fs.existsSync(configPath)) return { configPath, removed: false }
     let settings: ClaudeSettings
     try {
-      settings = readJsonConfig<ClaudeSettings>(configPath, { extraKnownMarketplaces: {}, enabledPlugins: [] })
+      settings = readJsonConfig<ClaudeSettings>(configPath, { extraKnownMarketplaces: {}, enabledPlugins: {} })
     } catch {
       return { configPath, removed: false }
     }
+    const enabled = normalizePlugins(settings)
     const id = pluginId()
-    const had = MARKETPLACE_NAME in settings.extraKnownMarketplaces || settings.enabledPlugins.includes(id)
+    const had = MARKETPLACE_NAME in settings.extraKnownMarketplaces || id in enabled
     if (!had) return { configPath, removed: false }
     delete settings.extraKnownMarketplaces[MARKETPLACE_NAME]
-    settings.enabledPlugins = settings.enabledPlugins.filter((p) => p !== id)
+    delete enabled[id]
+    settings.enabledPlugins = enabled
     writeJsonConfig(configPath, settings)
     return { configPath, removed: true }
   },

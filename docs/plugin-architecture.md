@@ -98,7 +98,7 @@ The plugin ships through the OpenTrace **marketplace** — `.claude-plugin/marke
   "extraKnownMarketplaces": {
     "opentrace": { "source": { "source": "github", "repo": "opentrace/opentrace-cli" } }
   },
-  "enabledPlugins": ["opentrace@opentrace"]
+  "enabledPlugins": { "opentrace@opentrace": true }
 }
 ```
 
