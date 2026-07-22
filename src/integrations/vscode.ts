@@ -1,9 +1,9 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { readJsonConfig, writeJsonConfig } from "../util/json-config.js"
+import { readJsonConfig, writeJsonConfig, removeJsonEntry } from "../util/json-config.js"
 import { SERVER_KEY, buildMcpUrl } from "../util/constants.js"
-import type { Integration, InstallOptions, InstallResult } from "./types.js"
+import type { Integration, InstallOptions, InstallResult, RemoveResult } from "./types.js"
 
 // VS Code MCP config is workspace-scoped only via the file API (.vscode/mcp.json).
 // User-level config requires the `code --add-mcp` CLI — not handled here.
@@ -43,6 +43,11 @@ const vscode: Integration = {
     config.servers[SERVER_KEY] = { type: "http", url: buildMcpUrl(opts.baseUrl) }
     writeJsonConfig(configPath, config)
     return { configPath, existed }
+  },
+
+  remove(projectDir, opts): RemoveResult {
+    const configPath = this.getConfigPath(projectDir, opts)
+    return { configPath, removed: removeJsonEntry(configPath, "servers", SERVER_KEY) }
   },
 }
 

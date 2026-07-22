@@ -85,26 +85,43 @@ Search the indexed codebase using OpenTrace. Use the `opentrace` MCP tools to...
 
 `.mcp.json` inside the plugin directory — same format as a project `.mcp.json`. The MCP server is activated when the plugin is installed, so users don't need to run `add-mcp` separately.
 
+The endpoint is not hardcoded: the plugin declares a `userConfig.mcp_url` option (default `https://api.opentrace.ai/mcp/v1/`) in `plugin.json`, and `.mcp.json` references it as `"url": "${user_config.mcp_url}"`. Claude Code prompts for the value at enable time and stores it per-user, so a user on a different OpenTrace host overrides it through the plugin config UI rather than editing files. (`${...}` substitution reads from user/managed settings, not project settings — it's a per-user setting.) `otx install --url <host>` pre-seeds this by writing `pluginConfigs["opentrace@opentrace"].options.mcp_url` into `~/.claude/settings.json`, so the plugin uses that endpoint without prompting.
+
+**API-key auth (optional).** The server entry also declares a `headersHelper` (`node "${CLAUDE_PLUGIN_ROOT}/bin/auth-headers.cjs"`). That script reads `~/.claude/opentrace-plugin.token` and, if present, emits `{"Authorization":"Bearer <key>"}`; if absent, it emits `{}` so Claude Code authenticates the server over OAuth. `otx connect otk_… --client claude-code` writes that token file (and seeds `mcp_url`), so the same plugin works with an API key or OAuth without a second server entry. A `headersHelper` can't read `${user_config.*}`, which is why the key lives in a file rather than a `sensitive` userConfig.
+
 ### Distribution
 
-Plugins can be installed from:
-- **npm package**: `claude plugin install @opentrace/claude-code-plugin`
-- **Git URL**: `claude plugin install github:opentrace/opentrace-cli?path=plugins/claude-code`
-- **Local path**: `claude plugin install ./plugins/claude-code`
+The plugin ships through the OpenTrace **marketplace** — `.claude-plugin/marketplace.json` at this repo's root lists the `opentrace` plugin (`source: ./plugins/claude-code`). Claude Code resolves the marketplace from the GitHub repo `opentrace/opentrace-cli`.
 
-The git subdirectory form (sparse clone) is ideal for a monorepo — a single git URL with `?path=` points Claude at the right subdirectory.
+**How `otx connect` installs it (the primary path):** the CLI writes the marketplace and plugin declaratively into Claude Code settings rather than shelling out — matching how it registers MCP. It adds an `extraKnownMarketplaces` entry and an `enabledPlugins` entry to `.claude/settings.json` (project) or `~/.claude/settings.json` (`--global`):
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "opentrace": { "source": { "source": "github", "repo": "opentrace/opentrace-cli" } }
+  },
+  "enabledPlugins": { "opentrace@opentrace": true }
+}
+```
+
+When the user next trusts the folder, Claude Code prompts to install the plugin. This needs no `claude` binary on `PATH` and merges into existing settings idempotently.
+
+**Manual alternatives** (equivalent, for direct use):
+- **Marketplace + install**: `claude plugin marketplace add opentrace/opentrace-cli` then `claude plugin install opentrace@opentrace`
+- **Local path (dev)**: `claude --plugin-dir ./plugins/claude-code`
 
 ### Install CLI
 
 ```bash
-claude plugin install @opentrace/claude-code-plugin   # from npm
-claude plugin install github:opentrace/opentrace-cli?path=plugins/claude-code  # from this repo
-claude plugin uninstall opentrace
-claude plugin enable opentrace
-claude plugin disable opentrace
-claude plugin update opentrace
+claude plugin marketplace add opentrace/opentrace-cli  # register the marketplace from this repo
+claude plugin install opentrace@opentrace              # install the plugin from it
+claude plugin uninstall opentrace@opentrace
+claude plugin enable opentrace@opentrace
+claude plugin disable opentrace@opentrace
 claude plugin validate ./plugins/claude-code           # lint before publishing
 ```
+
+`otx connect` does the first two steps for you declaratively (see [Distribution](#distribution)); these are the manual equivalents.
 
 **Install scopes**: `user` (`~/.claude/settings.json`), `project` (`.claude/settings.json`), `local` (`.claude/settings.local.json`).
 
@@ -203,23 +220,22 @@ opentrace-cli/
   docs/
     mcp-installs.md
     plugin-architecture.md
-  src/                              ← @opentrace/cli (this package)
+  src/                              ← @opentrace/cli (this package; bins: opentrace, otx)
     commands/
       add-mcp.ts
-      install.ts                    ← future: opentrace install [--claude-code] [--opencode] ...
-      install-plugin.ts             ← future: opentrace install-plugin claude-code [path]
-    integrations/                   ← one module per tool for MCP installs
-      claude-code.ts
+      install.ts                    ← `otx connect` / `opentrace install`: MCP + plugin onboarding
+    integrations/                   ← one module per tool; each declares MCP install + optional plugin capability
+      claude-code.ts                ← MCP + plugin capability (marketplace/settings.json)
       cursor.ts
       windsurf.ts
       vscode.ts
       continue.ts
       zed.ts
       jetbrains.ts
-      cody.ts
     util/
-      mcp-config.ts
-      detect.ts                     ← future: detect which tools are installed
+      constants.ts
+      json-config.ts
+      detect.ts                     ← detects which tools are installed
   plugins/
     claude-code/                    ← @opentrace/claude-code-plugin
       .claude-plugin/
@@ -246,21 +262,28 @@ opentrace-cli/
 - Claude Code supports `github:opentrace/opentrace-cli?path=plugins/claude-code` — no separate repo needed for git installs
 - npm workspaces can publish `@opentrace/cli`, `@opentrace/claude-code-plugin`, and `@opentrace/opencode-plugin` independently from the same repo
 
-### Install flow (future)
+### Install flow
+
+The CLI is the control plane: it installs the MCP server for every detected tool, and installs a plugin only where the target declares that capability. Today Claude Code is the only tool with a plugin capability; every other tool gets MCP alone.
 
 ```bash
-# Auto-detect installed tools, install all relevant plugins + MCP configs
-npx @opentrace/cli install
+# Auto-detect installed tools and onboard all of them (MCP + plugin where supported)
+npx @opentrace/cli connect
 
 # Specific tools
-npx @opentrace/cli install --claude-code    # runs: claude plugin install @opentrace/claude-code-plugin
-npx @opentrace/cli install --opencode       # adds @opentrace/opencode-plugin to opencode.json
-npx @opentrace/cli install --cursor         # copies plugin + MCP config
-npx @opentrace/cli install --vscode         # writes .vscode/mcp.json
-npx @opentrace/cli install --windsurf       # writes ~/.codeium/windsurf/mcp_config.json
+otx connect --claude-code    # declares the plugin in .claude/settings.json (no .mcp.json — the plugin supersedes it)
+otx connect --cursor         # writes .cursor/mcp.json (MCP only)
+otx connect --vscode         # writes .vscode/mcp.json (MCP only)
+otx connect --windsurf       # writes ~/.codeium/windsurf/mcp_config.json (MCP only)
 ```
 
-For tools with a rich plugin system (Claude Code, OpenCode), the plugin is the primary install path — it bundles everything including the MCP config. For tools without a plugin system, `add-mcp` / MCP config write is the install.
+Each integration in `src/integrations/` declares its MCP install and an optional `plugin` capability. Adding plugin support for a new tool (e.g. OpenCode) is a matter of populating that capability on its integration module — the onboarding loop picks it up automatically.
+
+### Still future
+
+- Bundled skills/agents/hooks (a shared skill area passed to whatever plugin a target supports)
+- Plugin capabilities for tools beyond Claude Code (OpenCode, Cursor)
+- npm publication of the plugin package(s)
 
 ---
 

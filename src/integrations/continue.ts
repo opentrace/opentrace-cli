@@ -2,7 +2,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { SERVER_KEY, buildMcpUrl } from "../util/constants.js"
-import type { Integration, InstallOptions, InstallResult } from "./types.js"
+import type { Integration, InstallOptions, InstallResult, RemoveResult } from "./types.js"
 
 const GLOBAL_CONFIG = path.join(os.homedir(), ".continue", "config.yaml")
 
@@ -74,6 +74,35 @@ const continueDev: Integration = {
     }
 
     return { configPath, existed }
+  },
+
+  remove(projectDir, opts): RemoveResult {
+    const isGlobal = opts.global ?? false
+    const configPath = this.getConfigPath(projectDir, opts)
+    if (!fs.existsSync(configPath)) return { configPath, removed: false }
+
+    if (!isGlobal) {
+      // Standalone file named after the server — just delete it.
+      fs.rmSync(configPath)
+      return { configPath, removed: true }
+    }
+
+    // Global config.yaml — strip the "- name: opentrace" list item and its body.
+    const raw = fs.readFileSync(configPath, "utf8")
+    const lines = raw.split(/\r?\n/)
+    const start = lines.findIndex((l) => ENTRY_PATTERN.test(l))
+    if (start === -1) return { configPath, removed: false }
+    const dashIndent = lines[start].search(/\S/)
+    let end = start + 1
+    while (end < lines.length) {
+      const line = lines[end]
+      if (line.trim() === "") break // entries written without blank lines; stop at one
+      if (line.search(/\S/) <= dashIndent) break // sibling item or shallower key
+      end++
+    }
+    lines.splice(start, end - start)
+    fs.writeFileSync(configPath, lines.join("\n"), "utf8")
+    return { configPath, removed: true }
   },
 }
 

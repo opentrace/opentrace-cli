@@ -2,7 +2,8 @@
   "mcpServers": {
     "opentrace": {
       "type": "http",
-      "url": "https://api.opentrace.ai/mcp/v1/",
+      "url": "${user_config.mcp_url}",
+      "headersHelper": "node \"${CLAUDE_PLUGIN_ROOT}/bin/auth-headers.cjs\"",
       "description": "OpenTrace dynamic MCP — search and explore your organization's indexed workspace code graphs"
     }
   }

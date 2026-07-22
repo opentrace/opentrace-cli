@@ -1,9 +1,9 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { readJsonConfig, writeJsonConfig } from "../util/json-config.js"
+import { readJsonConfig, writeJsonConfig, removeJsonEntry } from "../util/json-config.js"
 import { SERVER_KEY, buildMcpUrl } from "../util/constants.js"
-import type { Integration, InstallOptions, InstallResult } from "./types.js"
+import type { Integration, InstallOptions, InstallResult, RemoveResult } from "./types.js"
 
 const CONFIG_PATH = path.join(os.homedir(), ".codeium", "windsurf", "mcp_config.json")
 
@@ -39,6 +39,10 @@ const windsurf: Integration = {
     config.mcpServers[SERVER_KEY] = { type: "http", serverUrl: buildMcpUrl(opts.baseUrl) }
     writeJsonConfig(CONFIG_PATH, config)
     return { configPath: CONFIG_PATH, existed }
+  },
+
+  remove(_projectDir, _opts): RemoveResult {
+    return { configPath: CONFIG_PATH, removed: removeJsonEntry(CONFIG_PATH, "mcpServers", SERVER_KEY) }
   },
 }
 

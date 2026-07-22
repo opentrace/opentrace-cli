@@ -1,10 +1,11 @@
 {
   "name": "@opentrace/claude-code-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OpenTrace plugin for Claude Code — dynamic MCP server plus hooks that promote it",
   "files": [
     ".claude-plugin",
     ".mcp.json",
+    "bin",
     "hooks",
     "README.md"
   ],
