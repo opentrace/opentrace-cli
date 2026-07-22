@@ -1,6 +1,6 @@
 {
   "name": "opentrace",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Query your organization's indexed code graphs through the OpenTrace dynamic MCP server",
   "author": {
     "name": "OpenTrace Team"
