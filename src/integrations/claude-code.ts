@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { readJsonConfig, writeJsonConfig } from "../util/json-config.js"
+import { readJsonConfig, writeJsonConfig, removeJsonEntry } from "../util/json-config.js"
 import {
   SERVER_KEY,
   buildMcpUrl,
@@ -14,6 +14,7 @@ import type {
   Integration,
   InstallOptions,
   InstallResult,
+  RemoveResult,
   PluginCapability,
   PluginInstallResult,
 } from "./types.js"
@@ -82,6 +83,24 @@ const plugin: PluginCapability = {
     writeJsonConfig(configPath, settings)
     return { configPath, alreadyEnabled }
   },
+
+  remove(projectDir, opts): RemoveResult {
+    const configPath = this.getConfigPath(projectDir, opts)
+    if (!fs.existsSync(configPath)) return { configPath, removed: false }
+    let settings: ClaudeSettings
+    try {
+      settings = readJsonConfig<ClaudeSettings>(configPath, { extraKnownMarketplaces: {}, enabledPlugins: [] })
+    } catch {
+      return { configPath, removed: false }
+    }
+    const id = pluginId()
+    const had = MARKETPLACE_NAME in settings.extraKnownMarketplaces || settings.enabledPlugins.includes(id)
+    if (!had) return { configPath, removed: false }
+    delete settings.extraKnownMarketplaces[MARKETPLACE_NAME]
+    settings.enabledPlugins = settings.enabledPlugins.filter((p) => p !== id)
+    writeJsonConfig(configPath, settings)
+    return { configPath, removed: true }
+  },
 }
 
 const claudeCode: Integration = {
@@ -115,6 +134,11 @@ const claudeCode: Integration = {
     config.mcpServers[SERVER_KEY] = { type: "http", url: buildMcpUrl(opts.baseUrl) }
     writeJsonConfig(configPath, config)
     return { configPath, existed }
+  },
+
+  remove(projectDir, opts): RemoveResult {
+    const configPath = this.getConfigPath(projectDir, opts)
+    return { configPath, removed: removeJsonEntry(configPath, "mcpServers", SERVER_KEY) }
   },
 
   plugin,

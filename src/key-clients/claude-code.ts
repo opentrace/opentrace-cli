@@ -1,9 +1,9 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { readJsonConfig, writeJsonConfig } from "../util/json-config.js"
+import { readJsonConfig, writeJsonConfig, removeJsonEntry } from "../util/json-config.js"
 import { SERVER_KEY } from "../util/constants.js"
-import type { KeyClient, KeyClientResult } from "./types.js"
+import type { KeyClient, KeyClientResult, KeyClientRemoveResult } from "./types.js"
 
 // Claude Code stores user-scoped MCP servers in ~/.claude.json under a top-level
 // "mcpServers" key. Native HTTP transport with custom headers is supported.
@@ -44,6 +44,20 @@ const claudeCode: KeyClient = {
     }
     writeJsonConfig(configPath, config, { secret: true })
     return { configPath }
+  },
+
+  remove(): KeyClientRemoveResult {
+    const configPath = configFile()
+    if (!fs.existsSync(configPath)) return { configPath, removed: false }
+    let url: string | undefined
+    try {
+      const config = readJsonConfig<ClaudeJson>(configPath, { mcpServers: {} })
+      const entry = config.mcpServers[SERVER_KEY] as HttpServer | undefined
+      url = entry?.url
+    } catch {
+      return { configPath, removed: false }
+    }
+    return { configPath, removed: removeJsonEntry(configPath, "mcpServers", SERVER_KEY), url }
   },
 }
 

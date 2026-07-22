@@ -67,6 +67,31 @@ Adds only the OpenTrace MCP server to a Claude Code project's `.mcp.json` (no pl
 
 **Options:** `--base-url <url>`, `-y, --yes`.
 
+### `otx disconnect [path]`
+
+Reverses what the CLI set up. Choose components; with none selected it prompts interactively (or removes everything under `-y`).
+
+```bash
+otx disconnect --all                      # MCP entries + plugin + keychain key
+otx disconnect --mcp                       # just the MCP server entries
+otx disconnect --mcp --client cursor       # only Cursor's MCP entry
+otx disconnect --plugin                    # just the Claude Code plugin declaration
+otx disconnect --keychain --url https://…  # just the stored key for a host
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--mcp` / `--plugin` / `--keychain` | Pick components (combine freely) |
+| `--all` | All three |
+| `--client <id>` | Restrict MCP removal to one client (`claude-code`, `claude-desktop`, `cursor`, …) |
+| `--url <url>` | Keychain endpoint whose key to delete (for a non-default host) |
+| `-g, --global` | Also check user-level editor configs |
+| `-y, --yes` | Skip prompts |
+
+It removes the OpenTrace entry from each client config it finds, drops the plugin's `extraKnownMarketplaces`/`enabledPlugins` declaration (run `claude plugin uninstall opentrace@opentrace` to also clear the installed plugin cache), and deletes the stored key from the OS keychain — for the API-key flow it auto-derives the keychain host from the config it removed, so `--all` needs no `--url`.
+
 ## What it writes
 
 ### API-key flow (`connect otk_…`)

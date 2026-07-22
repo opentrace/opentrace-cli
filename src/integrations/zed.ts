@@ -1,9 +1,9 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { readJsonConfig, writeJsonConfig } from "../util/json-config.js"
+import { readJsonConfig, writeJsonConfig, removeJsonEntry } from "../util/json-config.js"
 import { SERVER_KEY, buildMcpUrl } from "../util/constants.js"
-import type { Integration, InstallOptions, InstallResult } from "./types.js"
+import type { Integration, InstallOptions, InstallResult, RemoveResult } from "./types.js"
 
 function configPath(): string {
   switch (process.platform) {
@@ -58,6 +58,11 @@ const zed: Integration = {
     }
     writeJsonConfig(filePath, config)
     return { configPath: filePath, existed }
+  },
+
+  remove(_projectDir, _opts): RemoveResult {
+    const filePath = configPath()
+    return { configPath: filePath, removed: removeJsonEntry(filePath, "context_servers", SERVER_KEY) }
   },
 }
 

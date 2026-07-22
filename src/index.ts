@@ -3,6 +3,7 @@ import { Command } from "commander"
 import { addMcp } from "./commands/add-mcp.js"
 import { install } from "./commands/install.js"
 import { connectWithKey } from "./commands/connect.js"
+import { disconnect } from "./commands/disconnect.js"
 import { ALL_INTEGRATIONS } from "./util/detect.js"
 import { DEFAULT_BASE_URL } from "./util/constants.js"
 import { looksLikeToken } from "./util/token.js"
@@ -71,6 +72,30 @@ connectCmd
       yes: opts.yes,
       global: opts.global,
       toolOpts: opts as Record<string, unknown>,
+    })
+  })
+
+program
+  .command("disconnect [path]")
+  .description("Remove OpenTrace from your clients: MCP entries, the Claude Code plugin, and/or the stored API key")
+  .option("--mcp", "Remove OpenTrace MCP server entries")
+  .option("--plugin", "Remove the Claude Code plugin declaration")
+  .option("--keychain", "Delete the stored API key from the OS keychain")
+  .option("--all", "Remove everything (MCP + plugin + keychain)")
+  .option("--client <id>", "Restrict MCP removal to one client (claude-code | claude-desktop | cursor | …)")
+  .option("--url <url>", "Keychain endpoint whose key to delete (for a non-default host)")
+  .option("-g, --global", "Also check user-level editor configs")
+  .option("-y, --yes", "Skip confirmation prompts")
+  .action(async (targetPath: string | undefined, opts) => {
+    await disconnect(targetPath ?? ".", {
+      mcp: opts.mcp,
+      plugin: opts.plugin,
+      keychain: opts.keychain,
+      all: opts.all,
+      client: opts.client,
+      global: opts.global,
+      url: opts.url,
+      yes: opts.yes,
     })
   })
 
