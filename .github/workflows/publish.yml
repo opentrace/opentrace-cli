@@ -1,0 +1,36 @@
+name: publish
+
+# Publishes @opentrace/cli to npm with provenance when a v* tag is pushed.
+# Provenance requires the id-token permission and a CI (OIDC) environment —
+# it cannot be generated from a local machine.
+#
+# Release flow:
+#   npm version <patch|minor|major>   # bumps package.json + creates the v<x.y.z> tag
+#   git push --follow-tags            # pushing the tag triggers this workflow
+#
+# One-time setup: add an npm token (Automation or Granular, with publish
+# rights to the @opentrace scope) as the repo secret NPM_TOKEN.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write # required for npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+      - run: npm run build
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
