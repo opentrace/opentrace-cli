@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs"
 import { Command } from "commander"
 import { addMcp } from "./commands/add-mcp.js"
 import { install } from "./commands/install.js"
@@ -8,12 +9,19 @@ import { ALL_INTEGRATIONS } from "./util/detect.js"
 import { DEFAULT_BASE_URL, toBaseUrl, buildMcpUrl } from "./util/constants.js"
 import { looksLikeToken } from "./util/token.js"
 
+// Read the version from package.json at runtime so `--version` never drifts from
+// the published package. dist/index.js → ../package.json resolves to the package
+// root, which npm always ships.
+const { version } = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+) as { version: string }
+
 const program = new Command()
 
 program
   .name("opentrace")
   .description("CLI for setting up and managing OpenTrace integrations")
-  .version("0.1.0")
+  .version(version)
 
 program
   .command("add-mcp [path]")
