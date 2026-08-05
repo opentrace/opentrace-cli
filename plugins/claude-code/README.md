@@ -5,8 +5,25 @@ A thin wrapper around the hosted OpenTrace **dynamic MCP server** (`https://api.
 ## What's included
 
 - **`.mcp.json`** — registers the dynamic MCP server (streamable HTTP, stateless). Authentication uses the standard MCP OAuth flow: Claude Code discovers the authorization server via RFC 9728 protected-resource metadata and prompts you to sign in on first use. Local dev servers running in auth-bypass mode need no credentials.
-- **`hooks/session-start.sh`** — injects context at session start describing the MCP tools and the `workspaces_list` → `environment_slug`/`workspace_slug` → resolve `source_id` → graph/source workflow, so the model uses the server correctly without trial and error.
-- **`hooks/user-prompt-submit.sh`** — when a prompt looks like an architecture, dependency, or impact question, adds a short reminder that the OpenTrace graph tools can help. Silent (`{}`) otherwise.
+- **`bin/prewarm.cjs`** — resolves the current checkout against OpenTrace at session start (see "Context prewarm" below).
+- **`hooks/session-start.sh`** — injects a ready-to-use binding for the current checkout (environment/workspace slugs, `source_id`, indexed commit, freshness vs. your HEAD) plus routing guidance, so the model's first OpenTrace call needs no discovery hops. Falls back to static workflow guidance when prewarm can't run.
+- **`hooks/user-prompt-submit.sh`** — when a prompt looks like an architecture, dependency, existence, or structure question, reminds the model that the graph tools can answer it — including the exact prewarmed parameters for this checkout when available. Silent (`{}`) otherwise.
+
+## Context prewarm
+
+At session start, `prewarm.cjs` derives `owner/repo` from `git remote`, resolves it to an indexed source over the MCP endpoint (~1s first run, cached after), and computes freshness locally with git (`merge-base`/`rev-list` against the indexed commit — no provider account needed). The model then starts each session knowing, e.g.:
+
+> This checkout (opentrace/opentrace-api) is indexed as "opentrace/opentrace-api" … indexed at 71e0cc3 on "dev" — an ancestor of your HEAD, 17 commit(s) behind it.
+
+with copy-pasteable arguments for `graph_search`, `graph_get_repo_overview`, and `graph_search_source_regions`.
+
+Details:
+
+- **Auth**: prewarm reuses the API key written by `otx connect otk_… --client claude-code` (`~/.claude/opentrace-plugin.token`). OAuth-only installs have no key on disk, so prewarm degrades to static guidance — the MCP itself still works over OAuth in-session.
+- **Cache**: bindings live in `~/.claude/opentrace-prewarm.json`, keyed by normalized remote. Positive entries refresh on every fresh session start; resumed/compacted sessions and prompt hints answer from cache instantly; "not indexed" results are re-checked after 24h. Delete the file to reset.
+- **Overrides**: `OPENTRACE_MCP_URL` (endpoint), and `OPENTRACE_ENVIRONMENT` + `OPENTRACE_WORKSPACE` (slugs, set both) to pin the scope instead of scanning your workspaces.
+- **Failure behavior**: a failed refresh serves the cached binding with a staleness note, or static guidance if nothing is cached. Unreachable endpoints and reachable-but-failing ones (auth rejected, tenant provisioning, malformed reply) are reported distinctly, so the note never blames the network for a server-side answer. The hook always answers within ~6s and never blocks the session.
+- **Debugging**: the hook is silent by design; set `OPENTRACE_PREWARM_DEBUG=1` to print the reason a refresh failed to stderr.
 
 ## MCP tools (served dynamically by opentrace-api)
 
