@@ -55,16 +55,27 @@ The key is never printed. (Undo: `otx disconnect --plugin` for Claude Code, or `
 
 ### `otx connect [path]` / `otx install [path]`
 
-When `connect` is given a path (or nothing) instead of a key, it runs editor onboarding: sets up OpenTrace for all detected AI tools — the Claude Code plugin where supported (which supersedes the bare MCP), a plain MCP entry everywhere else. `install` is the same flow.
+When `connect` is given a path (or nothing) instead of a key, it runs editor onboarding — the Claude Code plugin where supported (which supersedes the bare MCP), a plain MCP entry everywhere else. `install` is the same flow.
+
+Interactive by default. It asks three things, each skippable with a flag:
+
+1. **Scope** — just this project, or all projects (`-g, --global`)
+2. **Which tools** — detected ones pre-checked; the rest are still listed, so you can configure a tool before installing it (per-tool flags)
+3. **API key** — leave blank to sign in from the tool with OAuth instead (`--api-key`)
+
+A pasted key is shape-checked, then confirmed with an MCP handshake before anything is written; a key this machine already holds (OS keychain, or the plugin token file) is reused without asking. Keys are always written **user-scoped**, even when you pick project scope, so a bearer token never lands in a committable file. Tools with no API-key mechanism get the headerless MCP entry and are called out in the summary.
 
 ```bash
-otx connect                 # detect installed tools, onboard all
-otx install --claude-code   # a specific tool
-otx install /path/to/repo -y
-otx install --global        # user-level instead of project-level
+otx connect                    # prompt: scope → tools → key
+otx install --claude-code      # a specific tool (still asks scope + key)
+otx install /path/to/repo -y   # no prompts: detected tools, project scope, stored key
+otx install --global           # user-level instead of project-level
+otx install --api-key otk_…    # attach a key non-interactively
 ```
 
-**Options:** `--base-url <url>`, `-y, --yes`, `-g, --global`, and per-tool flags (`--claude-code`, `--cursor`, `--windsurf`, `--vscode`, `--continue`, `--zed`, `--jetbrains`).
+`-y` and any non-interactive run (CI, piped stdin) skip every prompt and fall back to detected tools, project scope, and whatever key is already stored.
+
+**Options:** `--base-url <url>`, `--url <url>`, `--api-key <key>`, `-y, --yes`, `-g, --global`, and per-tool flags (`--claude-code`, `--cursor`, `--windsurf`, `--vscode`, `--continue`, `--zed`, `--jetbrains`).
 
 ### `otx add-mcp [path]`
 
@@ -128,15 +139,16 @@ The bearer key goes into a **user-scoped** file in your home directory (never a 
 - **Claude Code → plugin only.** Where a plugin is available it supersedes the bare MCP entry (the plugin bundles its own MCP), so **no `.mcp.json` is written for Claude Code** — just the plugin declaration (`extraKnownMarketplaces` + `enabledPlugins`) in `.claude/settings.json`. Claude Code prompts to install when you trust the folder. (Want the Claude Code MCP *without* the plugin? Use `add-mcp`.)
 - **Other editors → MCP entry.** Cursor, Windsurf, VS Code, Zed, JetBrains, Continue get the headerless MCP config; auth is the editor's (OAuth).
 - **Endpoint** — pass `--url` (or `--base-url`) to target a non-prod host. For Claude Code it's injected as the plugin's `mcp_url` (written to `pluginConfigs` in `~/.claude/settings.json`, since Claude Code reads plugin config from user settings only); for other editors it's written into the MCP entry. Omit it and the plugin falls back to prompting for `mcp_url` (default `https://api.opentrace.ai/mcp/v1/`) on enable.
+- **With an API key** — the key goes to the same user-scoped destinations as the `connect otk_…` flow above (plugin token file for Claude Code; bearer-header entry + keychain for Cursor). The endpoint is always seeded as the plugin's `mcp_url` in that case, so the plugin never prompts for one.
 
 ## Authentication
 
 Two models:
 
 - **API key** (`connect otk_…`) — a `otk_` bearer key sent on every request, granting tenant-global reach. The key works against the MCP endpoint only; the CLI validates it via an MCP handshake (not a REST call). Keys can expire or be revoked — if calls start returning `401`, reconnect with a fresh key.
-- **OAuth** (`install` / `connect <path>` with no key) — the AI tool performs the OAuth handshake against the MCP endpoint itself; the CLI stores no token. Run `/mcp` in Claude Code and sign in.
+- **OAuth** (`install` / `connect <path>` when you leave the key prompt blank) — the AI tool performs the OAuth handshake against the MCP endpoint itself; the CLI stores no token. Run `/mcp` in Claude Code and sign in.
 
-The **Claude Code plugin supports both**: `otx install` sets it up for OAuth, while `otx connect otk_… --client claude-code` attaches an API key to the same plugin (via its `headersHelper`). With a key present the plugin authenticates by header; without one it uses OAuth.
+The **Claude Code plugin supports both**, and `otx install` can set up either: skip the key prompt for OAuth, or paste a key (or pass `--api-key`) to attach one — the same result as `otx connect otk_… --client claude-code`. With a key present the plugin authenticates by header; without one it uses OAuth.
 
 ## License
 

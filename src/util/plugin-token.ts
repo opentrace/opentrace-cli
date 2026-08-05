@@ -25,6 +25,20 @@ export function writePluginToken(token: string): string {
   return p
 }
 
+/**
+ * Read the key the plugin is currently using, if any. Lets onboarding reuse a
+ * key a previous `connect`/`install` already attached instead of asking again.
+ */
+export function readPluginToken(): string | undefined {
+  const p = pluginTokenPath()
+  try {
+    const raw = fs.readFileSync(p, "utf8").trim()
+    return raw || undefined
+  } catch {
+    return undefined // absent or unreadable — treat as "no key on file"
+  }
+}
+
 /** Remove the plugin token file. Returns true if it existed. */
 export function clearPluginToken(): boolean {
   const p = pluginTokenPath()
