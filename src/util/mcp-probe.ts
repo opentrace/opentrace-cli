@@ -5,6 +5,8 @@
 // The server is stateless (stateless_http=True): every request carries the auth
 // header and there is no session to reuse, so we do not track Mcp-Session-Id.
 
+import { packageVersion } from "./version.js"
+
 const PROTOCOL_VERSION = "2025-06-18"
 
 export type ProbeResult =
@@ -111,7 +113,7 @@ export async function probeMcp(mcpUrl: string, token: string): Promise<ProbeResu
       params: {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: {},
-        clientInfo: { name: "opentrace-cli", version: "0.1.0" },
+        clientInfo: { name: "opentrace-cli", version: packageVersion() },
       },
     })
   } catch (err) {
