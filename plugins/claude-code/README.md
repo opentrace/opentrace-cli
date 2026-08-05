@@ -22,7 +22,8 @@ Details:
 - **Auth**: prewarm reuses the API key written by `otx connect otk_… --client claude-code` (`~/.claude/opentrace-plugin.token`). OAuth-only installs have no key on disk, so prewarm degrades to static guidance — the MCP itself still works over OAuth in-session.
 - **Cache**: bindings live in `~/.claude/opentrace-prewarm.json`, keyed by normalized remote. Positive entries refresh on every fresh session start; resumed/compacted sessions and prompt hints answer from cache instantly; "not indexed" results are re-checked after 24h. Delete the file to reset.
 - **Overrides**: `OPENTRACE_MCP_URL` (endpoint), and `OPENTRACE_ENVIRONMENT` + `OPENTRACE_WORKSPACE` (slugs, set both) to pin the scope instead of scanning your workspaces.
-- **Failure behavior**: unreachable network serves the cached binding with a staleness note, or static guidance if nothing is cached. The hook always answers within ~6s and never blocks the session.
+- **Failure behavior**: a failed refresh serves the cached binding with a staleness note, or static guidance if nothing is cached. Unreachable endpoints and reachable-but-failing ones (auth rejected, tenant provisioning, malformed reply) are reported distinctly, so the note never blames the network for a server-side answer. The hook always answers within ~6s and never blocks the session.
+- **Debugging**: the hook is silent by design; set `OPENTRACE_PREWARM_DEBUG=1` to print the reason a refresh failed to stderr.
 
 ## MCP tools (served dynamically by opentrace-api)
 

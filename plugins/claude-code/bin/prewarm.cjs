@@ -128,9 +128,12 @@ function bindingContext(binding, f, opts = {}) {
     environment_slug: binding.environment_slug,
     workspace_slug: binding.workspace_slug,
   }
-  const staleNote = opts.stale
-    ? " (OpenTrace was unreachable just now; binding served from local cache.)"
-    : ""
+  const staleNote =
+    opts.stale === "bad_response"
+      ? " (OpenTrace could not refresh this binding just now; binding served from local cache.)"
+      : opts.stale === "unreachable"
+        ? " (OpenTrace was unreachable just now; binding served from local cache.)"
+        : ""
   return [
     HEADER,
     "",
@@ -326,6 +329,14 @@ function writeCache(cache) {
 
 let rpcId = 0
 
+// Distinguishes "the server replied with something unusable" from "we could not
+// reach the server", so the injected staleness note states the accurate reason.
+function badResponse(message) {
+  const err = new Error(message)
+  err.kind = "bad_response"
+  return err
+}
+
 async function rpc(url, token, body) {
   const res = await fetch(url, {
     method: "POST",
@@ -338,10 +349,16 @@ async function rpc(url, token, body) {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  // Everything past a completed round trip is a reachable-but-unusable answer
+  // (auth rejected, tenant provisioning, malformed body): tag as bad_response so
+  // it is never reported as an unreachable endpoint. Only a rejected fetch above
+  // — DNS, connection refused, timeout — counts as unreachable.
+  if (!res.ok) throw badResponse(`HTTP ${res.status}`)
   const text = await res.text()
   let msg = null
   if ((res.headers.get("content-type") || "").includes("text/event-stream")) {
+    // The MCP mount is stateless and sends one result event per POST, so the
+    // last parseable `data:` line is that result; earlier lines are keepalives.
     for (const line of text.split(/\r?\n/)) {
       if (!line.startsWith("data:")) continue
       try {
@@ -351,10 +368,14 @@ async function rpc(url, token, body) {
       }
     }
   } else {
-    msg = JSON.parse(text)
+    try {
+      msg = JSON.parse(text)
+    } catch {
+      throw badResponse("response body was not JSON")
+    }
   }
-  if (!msg) throw new Error("no JSON-RPC message in response")
-  if (msg.error) throw new Error(msg.error.message || "JSON-RPC error")
+  if (!msg) throw badResponse("no JSON-RPC message in response")
+  if (msg.error) throw badResponse(msg.error.message || "JSON-RPC error")
   return msg.result
 }
 
@@ -380,7 +401,15 @@ async function toolCall(url, token, name, args) {
   })
   if (result?.isError) throw new Error(`tool ${name} returned an error`)
   const text = (result?.content || []).find((c) => c.type === "text")?.text
-  if (text) return JSON.parse(text)
+  if (text) {
+    try {
+      return JSON.parse(text)
+    } catch {
+      // The server answered, just not with the JSON we expected. Tag it so the
+      // caller does not report this as an unreachable endpoint.
+      throw badResponse(`tool ${name} returned a non-JSON text block`)
+    }
+  }
   return result?.structuredContent?.result ?? result?.structuredContent ?? null
 }
 
@@ -409,8 +438,12 @@ async function resolveInScopes(url, token, ownerRepo, scopes) {
   )
   const hits = attempts.filter((a) => a.status === "fulfilled" && a.value).map((a) => a.value)
   if (!hits.length) {
-    // All rejected (network/auth) is a failure; all resolved-but-empty is a miss.
-    if (attempts.every((a) => a.status === "rejected")) throw new Error("all resolves failed")
+    // All rejected is a failure; all resolved-but-empty is a genuine miss.
+    // Propagate the first reason so its `kind` survives for the caller.
+    if (attempts.every((a) => a.status === "rejected")) {
+      const reason = attempts[0].reason
+      throw reason instanceof Error ? reason : new Error("all resolves failed")
+    }
     return null
   }
   const best = hits[0]
@@ -512,7 +545,9 @@ async function main() {
     const f = freshness(cwd, cachedBinding.indexed_commit_sha)
     output(bindingContext(cachedBinding, f), sysMsg(cachedBinding, f))
   }
-  if (cached?.unindexed && Date.now() - Date.parse(cached.resolved_at || 0) < UNINDEXED_TTL_MS) {
+  // A missing/unparseable timestamp falls back to 0, which reads as long expired
+  // and re-resolves — the fail-safe direction.
+  if (cached?.unindexed && Date.now() - (Date.parse(cached.resolved_at) || 0) < UNINDEXED_TTL_MS) {
     output(
       notIndexedContext(identity.ownerRepo),
       "OpenTrace is active — this checkout does not appear to be indexed.",
@@ -520,11 +555,15 @@ async function main() {
   }
 
   let binding = null
-  let unreachable = false
+  let refreshFailure = null // "unreachable" | "bad_response"
   try {
     binding = await resolveBinding(resolveMcpUrl(cwd), token, identity.ownerRepo, cachedBinding)
-  } catch {
-    unreachable = true
+  } catch (err) {
+    refreshFailure = err?.kind === "bad_response" ? "bad_response" : "unreachable"
+    // This hook is silent by design; set OPENTRACE_PREWARM_DEBUG=1 to see why.
+    if (process.env.OPENTRACE_PREWARM_DEBUG) {
+      process.stderr.write(`prewarm: resolve failed [${refreshFailure}] ${err && err.message}\n`)
+    }
   }
 
   if (binding) {
@@ -533,11 +572,11 @@ async function main() {
     const f = freshness(cwd, binding.indexed_commit_sha)
     output(bindingContext(binding, f), sysMsg(binding, f))
   }
-  if (unreachable && cachedBinding) {
+  if (refreshFailure && cachedBinding) {
     const f = freshness(cwd, cachedBinding.indexed_commit_sha)
-    output(bindingContext(cachedBinding, f, { stale: true }), sysMsg(cachedBinding, f))
+    output(bindingContext(cachedBinding, f, { stale: refreshFailure }), sysMsg(cachedBinding, f))
   }
-  if (unreachable) {
+  if (refreshFailure) {
     output(fallbackContext(), "OpenTrace is active — workspace code graphs are available.")
   }
   cache.bindings[identity.ownerRepo] = { unindexed: true, resolved_at: new Date().toISOString() }
