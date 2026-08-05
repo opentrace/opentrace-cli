@@ -2,8 +2,7 @@ import os from "node:os"
 import { normalizeMcpUrl, DEFAULT_BASE_URL } from "../util/constants.js"
 import { validateTokenShape, maskToken } from "../util/token.js"
 import { probeMcp } from "../util/mcp-probe.js"
-import { storeToken, KeychainUnavailableError } from "../util/keychain.js"
-import { writePluginToken } from "../util/plugin-token.js"
+import { attachClientKey, attachPluginKey } from "../util/attach-key.js"
 import { findKeyClient, detectKeyClients, KEY_CLIENTS, DEFAULT_KEY_CLIENT } from "../key-clients/index.js"
 import claudeCode from "../integrations/claude-code.js"
 
@@ -79,8 +78,7 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     let tokenPath: string
     try {
       settingsPath = claudeCode.plugin.install(os.homedir(), { global: true }).configPath
-      claudeCode.plugin.setMcpUrl(mcpUrl)
-      tokenPath = writePluginToken(token)
+      tokenPath = attachPluginKey(claudeCode.plugin, mcpUrl, token).tokenPath
     } catch (err) {
       console.error(`\nFailed to configure the Claude Code plugin: ${err instanceof Error ? err.message : String(err)}`)
       process.exit(1)
@@ -98,31 +96,24 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     return
   }
 
-  // 5b. Cursor / Claude Desktop: write the MCP entry with the bearer header directly.
+  // 5b. Cursor / Claude Desktop: write the MCP entry with the bearer header
+  //     directly, then record the key in the OS keychain (otx's own record).
+  //     The keychain write is best-effort — the client config already carries
+  //     the token, so a miss doesn't break the connection; just warn.
   let note: string | undefined
   let configPath: string
+  let keychainStored = false
   try {
-    const result = client.write(mcpUrl, token)
-    configPath = result.configPath
-    note = result.note
+    const attached = attachClientKey(client, mcpUrl, token)
+    configPath = attached.configPath
+    note = attached.note
+    keychainStored = attached.keychainStored
+    if (attached.keychainError) {
+      console.warn(`\nNote: ${attached.keychainError}\nThe key is still active in the ${client.label} config; it just wasn't saved to the keychain.`)
+    }
   } catch (err) {
     console.error(`\nFailed to write ${client.label} config: ${err instanceof Error ? err.message : String(err)}`)
     process.exit(1)
-  }
-
-  // 6. Persist to the OS keychain (otx's own record). Best-effort: the client
-  //    config already carries the token, so a keychain miss doesn't break the
-  //    connection — just warn.
-  let keychainStored = false
-  try {
-    storeToken(mcpUrl, token)
-    keychainStored = true
-  } catch (err) {
-    if (err instanceof KeychainUnavailableError) {
-      console.warn(`\nNote: ${err.message}\nThe key is still active in the ${client.label} config; it just wasn't saved to the keychain.`)
-    } else {
-      throw err
-    }
   }
 
   // 7. Report success — tenant-global, token masked.

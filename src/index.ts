@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs"
 import { Command } from "commander"
 import { addMcp } from "./commands/add-mcp.js"
 import { install } from "./commands/install.js"
@@ -8,13 +7,10 @@ import { disconnect } from "./commands/disconnect.js"
 import { ALL_INTEGRATIONS } from "./util/detect.js"
 import { DEFAULT_BASE_URL, toBaseUrl, buildMcpUrl } from "./util/constants.js"
 import { looksLikeToken } from "./util/token.js"
+import { packageVersion } from "./util/version.js"
 
-// Read the version from package.json at runtime so `--version` never drifts from
-// the published package. dist/index.js → ../package.json resolves to the package
-// root, which npm always ships.
-const { version } = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-) as { version: string }
+// Read at runtime so `--version` never drifts from the published package.
+const version = packageVersion()
 
 const program = new Command()
 
@@ -37,7 +33,8 @@ function addInstallOptions(cmd: Command): Command {
   cmd
     .option("--base-url <url>", "OpenTrace API base URL", DEFAULT_BASE_URL)
     .option("--url <url>", "OpenTrace MCP endpoint (overrides --base-url; fed to the plugin's mcp_url)")
-    .option("-y, --yes", "Skip confirmation prompts")
+    .option("--api-key <key>", "API key (otk_…) to attach; skips the interactive key prompt")
+    .option("-y, --yes", "Skip prompts: use detected tools, project scope, and any key already stored")
     .option("-g, --global", "Install to user-level config instead of project-level")
   ALL_INTEGRATIONS.forEach((i) => {
     cmd.option(`--${i.id}`, `${i.label}: ${i.helpText}`)
@@ -59,7 +56,7 @@ function resolveEndpoint(opts: { url?: string; baseUrl?: string }): { baseUrl: s
 const installCmd = addInstallOptions(
   program
     .command("install [path]")
-    .description("Onboard OpenTrace: register the MCP server (and the Claude Code plugin where supported) for all detected AI tools (or specific ones)"),
+    .description("Onboard OpenTrace: detect your AI tools, then register the MCP server (and the Claude Code plugin where supported) for the ones you pick"),
 )
 
 installCmd.action(async (targetPath: string | undefined, opts) => {
@@ -67,6 +64,7 @@ installCmd.action(async (targetPath: string | undefined, opts) => {
   await install(targetPath ?? ".", {
     baseUrl,
     pluginUrl,
+    apiKey: opts.apiKey,
     yes: opts.yes,
     global: opts.global,
     toolOpts: opts as Record<string, unknown>,
@@ -85,6 +83,11 @@ connectCmd
   .option("--client <id>", "Target client for the API-key flow: claude-code | claude-desktop | cursor")
   .action(async (tokenOrPath: string | undefined, opts) => {
     if (tokenOrPath && looksLikeToken(tokenOrPath)) {
+      // Both forms carry a key; the positional argument is the one this branch
+      // exists for, so say which one wins rather than dropping the flag silently.
+      if (opts.apiKey && opts.apiKey !== tokenOrPath) {
+        console.warn("Both a key argument and --api-key were given — using the key argument, ignoring --api-key.")
+      }
       await connectWithKey(tokenOrPath, { url: opts.url, client: opts.client })
       return
     }
@@ -92,6 +95,7 @@ connectCmd
     await install(tokenOrPath ?? ".", {
       baseUrl,
       pluginUrl,
+      apiKey: opts.apiKey,
       yes: opts.yes,
       global: opts.global,
       toolOpts: opts as Record<string, unknown>,
