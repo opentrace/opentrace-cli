@@ -9,7 +9,7 @@ import { probeMcp } from "../util/mcp-probe.js"
 import { getToken, KeychainUnavailableError } from "../util/keychain.js"
 import { readPluginToken } from "../util/plugin-token.js"
 import { attachClientKey, attachPluginKey } from "../util/attach-key.js"
-import { findKeyClient } from "../key-clients/index.js"
+import { findKeyClient, hasKeyClientEntry } from "../key-clients/index.js"
 import type { Integration } from "../integrations/types.js"
 
 interface InstallCommandOptions {
@@ -33,12 +33,36 @@ function flaggedTargets(opts: InstallCommandOptions): Integration[] {
   return ALL_INTEGRATIONS.filter(i => Boolean(toolOpts[toCamelCase(i.id)]))
 }
 
-/** True if OpenTrace is already wired into this integration at the given scope. */
-function isConfigured(integration: Integration, dir: string, isGlobal: boolean): boolean {
+/**
+ * The file this run would write for a tool, and whether OpenTrace is already in
+ * it. Mirrors the branching of the write loop — a plugin-hosted tool, a
+ * key-carrying client, or a plain MCP entry all land in different files — so
+ * "already configured" is answered about the file we are actually going to
+ * touch rather than the scope-selected one.
+ */
+function targetState(
+  integration: Integration,
+  dir: string,
+  isGlobal: boolean,
+  key?: ResolvedKey,
+): { configPath: string; configured: boolean } {
   const opts = { global: isGlobal }
-  return integration.plugin
-    ? integration.plugin.isEnabled(dir, opts)
-    : integration.hasEntry(dir, opts)
+  if (integration.plugin) {
+    return {
+      configPath: integration.plugin.getConfigPath(dir, opts),
+      configured: integration.plugin.isEnabled(dir, opts),
+    }
+  }
+  // With a key in hand this tool's entry is written user-scoped by its key
+  // client, so that is the file to inspect — not the project/global choice.
+  const keyClient = key ? findKeyClient(integration.id) : undefined
+  if (keyClient) {
+    return { configPath: keyClient.configPath(), configured: hasKeyClientEntry(keyClient) }
+  }
+  return {
+    configPath: integration.getConfigPath(dir, opts),
+    configured: integration.hasEntry(dir, opts),
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +101,10 @@ async function promptScope(): Promise<boolean> {
 async function promptTargets(dir: string, isGlobal: boolean): Promise<Integration[]> {
   const rows = ALL_INTEGRATIONS.map((integration) => {
     const detected = integration.detect()
-    const configured = isConfigured(integration, dir, isGlobal)
+    // No key resolved yet at this point, so this reads the scope-selected file.
+    // It is a label, not a decision — the authoritative check runs after the
+    // key prompt and prints what will actually be rewritten.
+    const { configured } = targetState(integration, dir, isGlobal)
     const tags = [detected ? "detected" : "not found"]
     if (configured) tags.push("already configured")
     return {
@@ -169,9 +196,13 @@ async function resolveApiKey(
   const existing = storedKey(mcpUrl)
   if (existing) {
     const where = existing.source === "keychain" ? "OS keychain" : "Claude Code plugin"
+    // Announced because it costs a network round-trip: without this the command
+    // appears to stall before its first output. Worth the wait either way — a
+    // revoked key that gets re-attached silently fails on every later call.
+    console.log(`Checking the API key stored in your ${where} (${maskToken(existing.token)}) …`)
     const check = await checkKey(mcpUrl, existing.token)
     if (check.ok) {
-      console.log(`Using the API key already stored in your ${where} (${maskToken(existing.token)}).`)
+      console.log(`  ✓ still valid — reusing it.`)
       return existing
     }
     if (check.rejected) {
@@ -264,16 +295,22 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   }
 
   // 2. Which tools. Per-tool flags win; then the prompt; then bare detection.
+  //    How they were chosen decides whether an existing config is confirmed
+  //    before it gets rewritten, so it is tracked rather than re-derived.
   let targets: Integration[]
+  let targetSource: "flags" | "prompt" | "detected"
   if (explicitTargets.length > 0) {
     targets = explicitTargets
+    targetSource = "flags"
   } else if (interactive) {
+    targetSource = "prompt"
     targets = await promptTargets(dir, isGlobal)
     if (targets.length === 0) {
       console.log("No tools selected — nothing to do.")
       return
     }
   } else {
+    targetSource = "detected"
     targets = detectInstalled()
     if (targets.length === 0) {
       console.log("No supported AI tools detected.")
@@ -290,21 +327,34 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   // 3. How they authenticate. Asked once and applied to every selected tool.
   const key = await resolveApiKey(mcpUrl, { apiKey: opts.apiKey, interactive })
 
+  // Only the flag path asks "overwrite?" per tool. The checkbox already labels
+  // which tools are configured and the user selected them anyway, so a confirm
+  // there would re-ask a choice just made; the flag path never showed that
+  // list. Either way a rewrite replaces OpenTrace's own entry only — the rest
+  // of the file is preserved — so what's at stake is a hand-edited OpenTrace
+  // entry, and the endpoint being written is printed in the summary.
+  const confirmBeforeOverwrite = targetSource === "flags" && interactive
+
+  // Say it up front when a run will rewrite existing config, so "already
+  // configured" tools are never overwritten silently.
+  if (!confirmBeforeOverwrite) {
+    const rewriting = targets.filter((i) => targetState(i, dir, isGlobal, key).configured)
+    if (rewriting.length > 0) {
+      console.log(`Rewriting existing OpenTrace config for: ${rewriting.map((i) => i.label).join(", ")}`)
+    }
+  }
+
   console.log()
   const results: Row[] = []
   let pluginInstalled = false
-  let keyAttached = false
+  let attachedKey: ResolvedKey | undefined
+  /** Tools left authenticating with OAuth — they still need a sign-in step. */
+  const oauthTargets: string[] = []
   const notes: string[] = []
 
   for (const integration of targets) {
-    // Targets picked in the prompt were an explicit choice — re-asking
-    // "overwrite?" for each one would just re-confirm what the user already
-    // said. The flag path never showed a list, so it still confirms.
-    const needsOverwriteConfirm = explicitTargets.length > 0 && !opts.yes && interactive
-    if (needsOverwriteConfirm && isConfigured(integration, dir, isGlobal)) {
-      const configPath = integration.plugin
-        ? integration.plugin.getConfigPath(dir, { global: isGlobal })
-        : integration.getConfigPath(dir, { global: isGlobal })
+    const { configPath, configured } = targetState(integration, dir, isGlobal, key)
+    if (confirmBeforeOverwrite && configured) {
       const overwrite = await confirm({
         message: `${integration.label}: OpenTrace already configured in ${configPath}. Overwrite?`,
         default: false,
@@ -329,19 +379,26 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
         })
 
         if (key) {
+          // Replacing a key already on file is an update, not an add — a
+          // summary that always says "added" would hide that a previous key
+          // was just overwritten.
+          const hadKey = readPluginToken() !== undefined
           // Seeding mcp_url alongside the key is what makes the plugin fully
           // non-interactive: with both present it never asks for an endpoint
           // and authenticates straight away.
           const attached = attachPluginKey(integration.plugin, mcpUrl, key.token)
-          keyAttached = true
+          attachedKey = key
           results.push({
             label: `${integration.label} (API key)`,
             configPath: attached.tokenPath,
-            status: "added",
+            status: hadKey ? "updated" : "added",
           })
-        } else if (opts.pluginUrl) {
-          const ur = integration.plugin.setMcpUrl(opts.pluginUrl)
-          console.log(`  ↳ plugin endpoint → ${opts.pluginUrl}  (${ur.configPath})`)
+        } else {
+          oauthTargets.push(integration.label)
+          if (opts.pluginUrl) {
+            const ur = integration.plugin.setMcpUrl(opts.pluginUrl)
+            console.log(`  ↳ plugin endpoint → ${opts.pluginUrl}  (${ur.configPath})`)
+          }
         }
         continue
       }
@@ -351,12 +408,13 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
       // is what their writers do, independent of the scope chosen above.
       const keyClient = key ? findKeyClient(integration.id) : undefined
       if (key && keyClient) {
+        const hadEntry = hasKeyClientEntry(keyClient)
         const attached = attachClientKey(keyClient, mcpUrl, key.token)
-        keyAttached = true
+        attachedKey = key
         results.push({
           label: `${integration.label} (API key)`,
           configPath: attached.configPath,
-          status: "added",
+          status: hadEntry ? "updated" : "added",
         })
         if (attached.keychainError) {
           notes.push(
@@ -374,6 +432,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
         configPath: r.configPath,
         status: r.existed ? "updated" : "added",
       })
+      oauthTargets.push(integration.label)
       if (key) {
         // Selected, wired up, but this tool has no way to carry the key — say
         // so instead of letting the user assume the key applies everywhere.
@@ -386,15 +445,18 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
 
   if (results.length === 0) return
 
+  // The status column is what distinguishes a first write from one that
+  // replaced something already there (a re-run, or a key swapped out).
   const colWidth = Math.max(...results.map((r) => r.label.length)) + 2
+  const statusWidth = Math.max(...results.map((r) => r.status.length)) + 2
   for (const r of results) {
     const icon = r.status === "skipped" ? "-" : "✓"
-    console.log(`  ${icon} ${r.label.padEnd(colWidth)} ${r.configPath}`)
+    console.log(`  ${icon} ${r.label.padEnd(colWidth)}${r.status.padEnd(statusWidth)}${r.configPath}`)
   }
 
   console.log()
   console.log(`  Endpoint:  ${mcpUrl}`)
-  if (keyAttached && key) console.log(`  API key:   ${maskToken(key.token)}`)
+  if (attachedKey) console.log(`  API key:   ${maskToken(attachedKey.token)}`)
 
   for (const note of notes) {
     console.log()
@@ -402,22 +464,30 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   }
 
   const changed = results.some((r) => r.status !== "skipped")
-  if (changed || pluginInstalled) {
+  if (!changed && !pluginInstalled) return
+
+  console.log()
+  console.log("Next steps:")
+  console.log("  1. Restart your AI tools to activate the OpenTrace MCP server.")
+  if (pluginInstalled) {
+    console.log("     Claude Code will prompt to install the OpenTrace plugin — accept it, then run /reload-plugins.")
+    if (!attachedKey && !opts.pluginUrl) {
+      console.log("     (it will also ask for the MCP endpoint — the default is production)")
+    }
+  }
+
+  // Only the tools that ended up without a key still need a sign-in, so name
+  // them rather than pointing everyone at Claude Code's /mcp. Tools that were
+  // skipped or failed to write never reach this list.
+  if (oauthTargets.length > 0) {
+    const suffix = oauthTargets.includes("Claude Code") ? " (in Claude Code: /mcp)" : ""
+    console.log(`  2. Sign in to OpenTrace from ${oauthTargets.join(", ")} to authorize${suffix}.`)
+  } else if (attachedKey) {
+    console.log("  2. That's it — your API key is already attached.")
+  }
+
+  if (attachedKey) {
     console.log()
-    console.log("Next steps:")
-    console.log("  1. Restart your AI tools to activate the OpenTrace MCP server.")
-    if (pluginInstalled) {
-      console.log("     Claude Code will prompt to install the OpenTrace plugin — accept it, then run /reload-plugins.")
-      if (!key && !opts.pluginUrl) {
-        console.log("     (it will also ask for the MCP endpoint — the default is production)")
-      }
-    }
-    if (keyAttached) {
-      console.log("  2. That's it — your API key is already attached.")
-      console.log()
-      console.log("Heads up: API keys can expire or be revoked — if calls start returning 401, reconnect with a fresh key.")
-    } else {
-      console.log("  2. In Claude Code, run /mcp and sign in to OpenTrace to authorize the connection.")
-    }
+    console.log("Heads up: API keys can expire or be revoked — if calls start returning 401, reconnect with a fresh key.")
   }
 }

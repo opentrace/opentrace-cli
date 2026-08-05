@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs"
 import { Command } from "commander"
 import { addMcp } from "./commands/add-mcp.js"
 import { install } from "./commands/install.js"
@@ -8,13 +7,10 @@ import { disconnect } from "./commands/disconnect.js"
 import { ALL_INTEGRATIONS } from "./util/detect.js"
 import { DEFAULT_BASE_URL, toBaseUrl, buildMcpUrl } from "./util/constants.js"
 import { looksLikeToken } from "./util/token.js"
+import { packageVersion } from "./util/version.js"
 
-// Read the version from package.json at runtime so `--version` never drifts from
-// the published package. dist/index.js → ../package.json resolves to the package
-// root, which npm always ships.
-const { version } = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-) as { version: string }
+// Read at runtime so `--version` never drifts from the published package.
+const version = packageVersion()
 
 const program = new Command()
 
@@ -87,6 +83,11 @@ connectCmd
   .option("--client <id>", "Target client for the API-key flow: claude-code | claude-desktop | cursor")
   .action(async (tokenOrPath: string | undefined, opts) => {
     if (tokenOrPath && looksLikeToken(tokenOrPath)) {
+      // Both forms carry a key; the positional argument is the one this branch
+      // exists for, so say which one wins rather than dropping the flag silently.
+      if (opts.apiKey && opts.apiKey !== tokenOrPath) {
+        console.warn("Both a key argument and --api-key were given — using the key argument, ignoring --api-key.")
+      }
       await connectWithKey(tokenOrPath, { url: opts.url, client: opts.client })
       return
     }
