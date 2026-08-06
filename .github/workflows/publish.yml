@@ -62,9 +62,15 @@ jobs:
 
       - run: npm install -g npm@latest # trusted publishing needs npm >= 11.5.1
 
-      # Decide whether there is anything to release. `npm view <pkg>@<version>`
-      # exits non-zero when that exact version is unpublished, which is the
-      # signal we want — it asks the registry rather than trusting git state.
+      # Decide whether there is anything to release, by asking the registry
+      # rather than trusting git state.
+      #
+      # `npm view <pkg>@<version>` exits non-zero for "that version is
+      # unpublished" AND for "the registry could not be reached" — so a failed
+      # lookup on its own does not mean the version is new. A second lookup for
+      # the package itself separates the two: if the package resolves but the
+      # version does not, the version is genuinely unpublished; if neither
+      # resolves, the check is inconclusive and we refuse rather than guess.
       - name: Check whether this version needs publishing
         id: check
         run: |
@@ -77,9 +83,16 @@ jobs:
           if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "$NAME@$VERSION is already on npm — nothing to release." >> "$GITHUB_STEP_SUMMARY"
-          else
+          elif npm view "$NAME" version >/dev/null 2>&1; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "Releasing $NAME@$VERSION." >> "$GITHUB_STEP_SUMMARY"
+          else
+            # Either the registry is unreachable, or the package does not exist
+            # yet — trusted publishing cannot do the first publish, so that one
+            # is bootstrapped locally (see the header).
+            echo "::error::Could not reach the npm registry, or $NAME has never been published. Refusing to release on an inconclusive check."
+            echo "Aborted: could not determine whether $NAME@$VERSION is already published." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
 
       - if: steps.check.outputs.publish == 'true'
