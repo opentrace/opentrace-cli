@@ -1,37 +1,118 @@
 name: publish
 
-# Publishes @opentrace/cli to npm when a v* tag is pushed, using npm Trusted
-# Publishing (OIDC) — no npm token. GitHub Actions mints a short-lived OIDC
-# identity that npm verifies against the package's configured trusted publisher,
-# and provenance is generated automatically.
+# Publishes @opentrace/cli to npm when a release lands on main, using npm
+# Trusted Publishing (OIDC) — no npm token. GitHub Actions mints a short-lived
+# OIDC identity that npm verifies against the package's configured trusted
+# publisher, and provenance is generated automatically.
 #
-# One-time prerequisites:
-#   1. The package must already exist on npm (trusted publishing can't do the
-#      very first publish). Bootstrap once locally: `npm publish --no-provenance`.
+# Release model — the version in package.json is the source of truth:
+#
+#   1. A feature PR bumps the version when the CLI change warrants it
+#      (`npm version <patch|minor|major> --no-git-tag-version`, committed with
+#      the change). No tag: tagging is this workflow's job.
+#   2. Merging that PR into `dev` releases nothing — this workflow only watches
+#      `main`.
+#   3. Merging `dev` into `main` runs this workflow. If package.json's version
+#      is not on npm yet, it publishes, then tags `v<version>` and cuts a
+#      GitHub release. If that version is already published, it exits cleanly —
+#      so ordinary merges to main (docs, CI, anything without a bump) are a
+#      no-op rather than a failure.
+#   4. `workflow_dispatch` runs the same logic on demand, for when a release
+#      needs re-triggering after an infrastructure failure.
+#
+# Because step 3 is version-gated rather than tag-gated, releasing is just
+# "merge to main" and re-running is always safe.
+#
+# One-time prerequisites (already done for this repo):
+#   1. The package must already exist on npm — trusted publishing can't do the
+#      very first publish. Bootstrap once locally: `npm publish --no-provenance`.
 #   2. On npmjs.com → @opentrace/cli → Settings → Trusted Publisher → GitHub
-#      Actions: repo opentrace/opentrace-cli, workflow "publish.yml", action npm publish.
-#
-# Release flow: `npm version <patch|minor|major>` then `git push --follow-tags`.
+#      Actions: repo opentrace/opentrace-cli, workflow "publish.yml", action
+#      npm publish. The trusted publisher is bound to this FILENAME — renaming
+#      this file breaks authentication until npm is updated to match.
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # push the v* tag and create the GitHub release
   id-token: write # required for OIDC trusted publishing + provenance
+
+# Never let two releases race: a second merge waits rather than publishing
+# concurrently, and queued runs are not cancelled (a cancelled publish could
+# leave a tag without its npm release).
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags, so an existing v<version> is visible
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22 # trusted publishing needs Node >= 22.14.0
           registry-url: "https://registry.npmjs.org"
+
       - run: npm install -g npm@latest # trusted publishing needs npm >= 11.5.1
-      - run: npm ci
-      - run: npm run build
-      - run: npm publish # tokenless — authenticated via the OIDC trusted publisher
+
+      # Decide whether there is anything to release. `npm view <pkg>@<version>`
+      # exits non-zero when that exact version is unpublished, which is the
+      # signal we want — it asks the registry rather than trusting git state.
+      - name: Check whether this version needs publishing
+        id: check
+        run: |
+          set -euo pipefail
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          echo "name=$NAME"       >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "$NAME@$VERSION is already on npm — nothing to release." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Releasing $NAME@$VERSION." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - if: steps.check.outputs.publish == 'true'
+        run: npm ci
+
+      - if: steps.check.outputs.publish == 'true'
+        run: npm run build
+
+      - name: Publish to npm
+        if: steps.check.outputs.publish == 'true'
+        run: npm publish # tokenless — authenticated via the OIDC trusted publisher
+
+      # Tag only after a successful publish, so a tag never implies a release
+      # that did not happen. Idempotent: a tag left behind by a previous failed
+      # run is reused rather than treated as an error.
+      - name: Tag and create the GitHub release
+        if: steps.check.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists — leaving it as is."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "v$VERSION" -m "v$VERSION"
+            git push origin "v$VERSION"
+          fi
+
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists — leaving it as is."
+          else
+            gh release create "v$VERSION" --title "v$VERSION" --generate-notes
+          fi
