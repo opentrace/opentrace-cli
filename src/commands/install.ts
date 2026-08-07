@@ -2,13 +2,15 @@ import path from "node:path"
 import fs from "node:fs"
 import { checkbox, confirm, password, select } from "@inquirer/prompts"
 import { ALL_INTEGRATIONS, detectInstalled } from "../util/detect.js"
-import { DEFAULT_BASE_URL, buildMcpUrl } from "../util/constants.js"
+import { DEFAULT_BASE_URL, buildMcpUrl, buildIngestUrl } from "../util/constants.js"
 import { isInteractive } from "../util/tty.js"
 import { maskToken, validateTokenShape } from "../util/token.js"
 import { probeMcp } from "../util/mcp-probe.js"
 import { getToken, KeychainUnavailableError } from "../util/keychain.js"
 import { readPluginToken } from "../util/plugin-token.js"
 import { attachClientKey, attachPluginKey } from "../util/attach-key.js"
+import { resolveKeyMaterial } from "../util/provision.js"
+import { resolveTelemetryPlan, writeTelemetryEnv } from "../util/telemetry.js"
 import { findKeyClient, hasKeyClientEntry } from "../key-clients/index.js"
 import type { Integration } from "../integrations/types.js"
 
@@ -18,6 +20,8 @@ interface InstallCommandOptions {
   pluginUrl?: string
   /** API key supplied on the command line — the non-interactive form of the key prompt. */
   apiKey?: string
+  /** Explicit --track-usage / --no-track-usage; undefined = not stated (prompt or skip). */
+  trackUsage?: boolean
   yes?: boolean
   global?: boolean
   toolOpts?: Record<string, unknown>
@@ -135,23 +139,15 @@ interface ResolvedKey {
   source: KeySource
 }
 
-interface KeyCheck {
-  ok: boolean
-  /** True when the key itself was rejected, as opposed to the check not completing. */
-  rejected: boolean
-  message?: string
-  toolCount?: number
-}
-
 /**
- * Confirm a key with a real MCP handshake. Only a 401 tells us the key is bad —
- * a network or provisioning failure says nothing about the key, so those are
- * reported as "unverified" and the key is still used.
+ * Everything the key step produced. `key` is what MCP clients authenticate
+ * with (an mcp-scoped key when it was minted); `provisioningKey` is the
+ * API-scoped key that minted it, kept in memory for the usage-tracking step —
+ * it is never written anywhere.
  */
-async function checkKey(mcpUrl: string, token: string): Promise<KeyCheck> {
-  const probe = await probeMcp(mcpUrl, token)
-  if (probe.ok) return { ok: true, rejected: false, toolCount: probe.tools.length }
-  return { ok: false, rejected: probe.kind === "auth", message: probe.message }
+interface ResolvedAuth {
+  key?: ResolvedKey
+  provisioningKey?: string
 }
 
 /** A key already on this machine from an earlier connect/install, if there is one. */
@@ -173,24 +169,52 @@ const MAX_KEY_ATTEMPTS = 3
 /**
  * Decide what these tools will authenticate with. In order: the `--api-key`
  * flag, a key this machine already holds, then (interactively) a prompt.
- * Returning undefined means "no key" — the tools fall back to signing in with
- * OAuth from inside the tool, which is a fully supported outcome, not an error.
+ *
+ * A supplied key is classified by asking the surfaces (resolveKeyMaterial):
+ * an API-scoped key mints a fresh mcp-scoped key on the spot and is kept for
+ * the usage-tracking step; an mcp-scoped key is attached directly (how keys
+ * worked before scopes, so existing keys keep working). A key this machine
+ * already stores is always an mcp-scoped one — that is the only kind the CLI
+ * persists — so it is re-checked with an MCP handshake, not REST.
+ *
+ * Returning no key means the tools fall back to signing in with OAuth from
+ * inside the tool, which is a fully supported outcome, not an error.
  */
-async function resolveApiKey(
+async function resolveAuth(
+  baseUrl: string,
   mcpUrl: string,
   opts: { apiKey?: string; interactive: boolean },
-): Promise<ResolvedKey | undefined> {
+): Promise<ResolvedAuth> {
+  const classify = async (token: string, source: KeySource): Promise<ResolvedAuth | "rejected"> => {
+    const material = await resolveKeyMaterial(baseUrl, mcpUrl, token)
+    switch (material.kind) {
+      case "provisioned":
+        console.log(`  ✓ API-scoped key accepted — minted an MCP key (${maskToken(material.mcpToken)}) for this machine.`)
+        return {
+          key: { token: material.mcpToken, source },
+          provisioningKey: material.provisioningKey,
+        }
+      case "mcp":
+        if (material.note) console.log(`  ${material.note}`)
+        return { key: { token: material.mcpToken, source } }
+      case "unverified":
+        console.warn(`Note: could not verify the key — ${material.message}`)
+        return { key: { token: material.mcpToken, source } }
+      case "rejected":
+        console.error(`Key rejected: ${material.message}`)
+        return "rejected"
+    }
+  }
+
   if (opts.apiKey) {
-    const check = await checkKey(mcpUrl, opts.apiKey)
-    if (check.rejected) {
+    const auth = await classify(opts.apiKey, "flag")
+    if (auth === "rejected") {
       // An explicitly supplied key that the server rejects is a hard failure —
       // proceeding would wire up a connection that cannot work.
-      console.error(`\nKey rejected: ${check.message}`)
       console.error("Re-copy the key, or create a fresh one, then run install again.")
       process.exit(1)
     }
-    if (!check.ok) console.warn(`Note: could not verify the key — ${check.message}`)
-    return { token: opts.apiKey, source: "flag" }
+    return auth
   }
 
   const existing = storedKey(mcpUrl)
@@ -199,23 +223,23 @@ async function resolveApiKey(
     // Announced because it costs a network round-trip: without this the command
     // appears to stall before its first output. Worth the wait either way — a
     // revoked key that gets re-attached silently fails on every later call.
-    console.log(`Checking the API key stored in your ${where} (${maskToken(existing.token)}) …`)
-    const check = await checkKey(mcpUrl, existing.token)
-    if (check.ok) {
+    console.log(`Checking the MCP key stored in your ${where} (${maskToken(existing.token)}) …`)
+    const probe = await probeMcp(mcpUrl, existing.token)
+    if (probe.ok) {
       console.log(`  ✓ still valid — reusing it.`)
-      return existing
+      return { key: existing }
     }
-    if (check.rejected) {
+    if (probe.kind === "auth") {
       // Expired or revoked — say so and fall through, rather than silently
       // re-attaching a key that returns 401 on every call.
-      console.warn(`The API key stored in your ${where} was rejected — ${check.message}`)
+      console.warn(`The MCP key stored in your ${where} was rejected — ${probe.message}`)
     } else {
-      console.warn(`Could not verify the stored API key — ${check.message}`)
-      return existing
+      console.warn(`Could not verify the stored MCP key — ${probe.message}`)
+      return { key: existing }
     }
   }
 
-  if (!opts.interactive) return undefined
+  if (!opts.interactive) return {}
 
   for (let attempt = 1; attempt <= MAX_KEY_ATTEMPTS; attempt++) {
     const entered = (
@@ -230,20 +254,16 @@ async function resolveApiKey(
       })
     ).trim()
 
-    if (!entered) return undefined
+    if (!entered) return {}
 
-    const check = await checkKey(mcpUrl, entered)
-    if (check.ok || !check.rejected) {
-      if (!check.ok) console.warn(`Note: could not verify the key — ${check.message}`)
-      return { token: entered, source: "prompt" }
-    }
-    console.error(`Key rejected: ${check.message}`)
+    const auth = await classify(entered, "prompt")
+    if (auth !== "rejected") return auth
     if (attempt === MAX_KEY_ATTEMPTS) {
       console.log("Continuing without a key — sign in from your tool with /mcp instead.")
-      return undefined
+      return {}
     }
   }
-  return undefined
+  return {}
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +345,22 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   }
 
   // 3. How they authenticate. Asked once and applied to every selected tool.
-  const key = await resolveApiKey(mcpUrl, { apiKey: opts.apiKey, interactive })
+  //    An API-scoped key is spent on minting an mcp-scoped `key` here and is
+  //    carried forward (in memory only) for the usage-tracking step.
+  const auth = await resolveAuth(baseUrl, mcpUrl, { apiKey: opts.apiKey, interactive })
+  const key = auth.key
+
+  // 4. Usage tracking. Decided and provisioned up front so every prompt and
+  //    network round-trip happens before the first file is written.
+  const telemetry = await resolveTelemetryPlan({
+    dir,
+    baseUrl,
+    isGlobal,
+    interactive,
+    trackUsage: opts.trackUsage,
+    provisioningKey: auth.provisioningKey,
+    targetsClaudeCode: targets.some((i) => i.id === "claude-code"),
+  })
 
   // Only the flag path asks "overwrite?" per tool. The checkbox already labels
   // which tools are configured and the user selected them anyway, so a confirm
@@ -443,6 +478,27 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     }
   }
 
+  // Apply the usage-tracking plan (its prompts and minting already ran above).
+  if (telemetry.note) notes.push(telemetry.note)
+  if (telemetry.plan) {
+    try {
+      const { existed } = writeTelemetryEnv(telemetry.plan.configPath, telemetry.plan.env)
+      results.push({
+        label: "Claude Code (usage tracking)",
+        configPath: telemetry.plan.configPath,
+        status: existed ? "updated" : "added",
+      })
+      if (!telemetry.plan.isGlobalScope) {
+        notes.push(
+          "Usage tracking: the usage key lands in .claude/settings.json, which is often committed. " +
+            'It is a write-only ingest credential (it cannot read anything), but pick "All projects" if you don\'t want it in the repo.',
+        )
+      }
+    } catch (err) {
+      console.error(`  Claude Code (usage tracking): failed — ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
   if (results.length === 0) return
 
   // The status column is what distinguishes a first write from one that
@@ -456,7 +512,8 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
 
   console.log()
   console.log(`  Endpoint:  ${mcpUrl}`)
-  if (attachedKey) console.log(`  API key:   ${maskToken(attachedKey.token)}`)
+  if (attachedKey) console.log(`  MCP key:   ${maskToken(attachedKey.token)}`)
+  if (telemetry.plan) console.log(`  Usage:     ${buildIngestUrl(baseUrl)}`)
 
   for (const note of notes) {
     console.log()

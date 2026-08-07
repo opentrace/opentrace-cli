@@ -1,6 +1,10 @@
-// OpenTrace API key ("otk") handling. The key authenticates against the MCP
-// mount only (REST endpoints reject it), so we never validate it via REST —
-// shape-check locally, then confirm with an MCP handshake (see mcp-probe.ts).
+// OpenTrace API key ("otk") handling. All OpenTrace keys share this shape;
+// which surface accepts one is decided by the key's scope, invisible in the
+// token itself: an API-scoped key authenticates against the REST surface
+// (the CLI spends it minting the others — see provision.ts), an mcp-scoped
+// key against the MCP mount, and a claude_code_telemetry-scoped key against
+// the OTLP ingest endpoint. Shape-check locally, then classify by asking the
+// surfaces (see provision.ts / mcp-probe.ts).
 
 /** otk_ followed by exactly 43 URL-safe base64 chars (total length 47). */
 export const TOKEN_REGEX = /^otk_[A-Za-z0-9_-]{43}$/

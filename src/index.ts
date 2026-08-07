@@ -33,13 +33,24 @@ function addInstallOptions(cmd: Command): Command {
   cmd
     .option("--base-url <url>", "OpenTrace API base URL", DEFAULT_BASE_URL)
     .option("--url <url>", "OpenTrace MCP endpoint (overrides --base-url; fed to the plugin's mcp_url)")
-    .option("--api-key <key>", "API key (otk_…) to attach; skips the interactive key prompt")
+    .option("--api-key <key>", "API-scoped key (otk_…) used to provision the per-surface keys; skips the interactive key prompt")
+    .option("--track-usage", "Enable Claude Code usage tracking (OTEL telemetry env) without asking")
+    .option("--no-track-usage", "Skip Claude Code usage tracking without asking")
     .option("-y, --yes", "Skip prompts: use detected tools, project scope, and any key already stored")
     .option("-g, --global", "Install to user-level config instead of project-level")
   ALL_INTEGRATIONS.forEach((i) => {
     cmd.option(`--${i.id}`, `${i.label}: ${i.helpText}`)
   })
   return cmd
+}
+
+/**
+ * Tri-state for --track-usage: commander defaults a defined `--no-` pair to
+ * true, but "not stated" must stay distinguishable so the interactive prompt
+ * can run — only a value the user actually typed counts.
+ */
+function explicitTrackUsage(cmd: Command): boolean | undefined {
+  return cmd.getOptionValueSource("trackUsage") === "cli" ? (cmd.opts().trackUsage as boolean) : undefined
 }
 
 /**
@@ -65,6 +76,7 @@ installCmd.action(async (targetPath: string | undefined, opts) => {
     baseUrl,
     pluginUrl,
     apiKey: opts.apiKey,
+    trackUsage: explicitTrackUsage(installCmd),
     yes: opts.yes,
     global: opts.global,
     toolOpts: opts as Record<string, unknown>,
@@ -88,7 +100,13 @@ connectCmd
       if (opts.apiKey && opts.apiKey !== tokenOrPath) {
         console.warn("Both a key argument and --api-key were given — using the key argument, ignoring --api-key.")
       }
-      await connectWithKey(tokenOrPath, { url: opts.url, client: opts.client })
+      await connectWithKey(tokenOrPath, {
+        url: opts.url,
+        client: opts.client,
+        trackUsage: explicitTrackUsage(connectCmd),
+        global: opts.global,
+        yes: opts.yes,
+      })
       return
     }
     const { baseUrl, pluginUrl } = resolveEndpoint(opts)
@@ -96,6 +114,7 @@ connectCmd
       baseUrl,
       pluginUrl,
       apiKey: opts.apiKey,
+      trackUsage: explicitTrackUsage(connectCmd),
       yes: opts.yes,
       global: opts.global,
       toolOpts: opts as Record<string, unknown>,
