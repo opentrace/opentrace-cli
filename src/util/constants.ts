@@ -20,6 +20,21 @@ export function toBaseUrl(input: string): string {
   return input.trim().replace(/\/+$/, "").replace(/\/mcp\/v1$/, "")
 }
 
+/** REST endpoint for minting per-surface API keys. */
+export function buildApiKeysUrl(baseUrl: string): string {
+  return `${toBaseUrl(baseUrl)}/api-keys`
+}
+
+/**
+ * OTLP ingest endpoint base for Claude Code telemetry. Claude Code's exporter
+ * appends the signal path (/v1/metrics, /v1/logs) itself, so this deliberately
+ * stops at the mount. Derived from the same host as the MCP endpoint, so
+ * --url/--base-url move both together.
+ */
+export function buildIngestUrl(baseUrl: string): string {
+  return `${toBaseUrl(baseUrl)}/ingest/claude-code`
+}
+
 // Claude Code plugin distribution (declarative marketplace onboarding).
 // The marketplace manifest lives at .claude-plugin/marketplace.json in this repo.
 export const MARKETPLACE_NAME = "opentrace"
