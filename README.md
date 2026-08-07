@@ -147,7 +147,7 @@ The **minted MCP-scoped key** (not the API-scoped key you pasted, which is never
 
 ## Usage tracking (Claude Code telemetry)
 
-Opt-in, asked during `connect`/`install` (or forced with `--track-usage` / suppressed with `--no-track-usage`). When enabled, the CLI mints a **usage key** (`claude_code_telemetry` scope) with your API-scoped key and appends the OTLP exporter env block to the Claude Code settings file at the level you pick — `.claude/settings.json` in the project, or `~/.claude/settings.json` for all projects:
+Opt-in, asked during `connect`/`install` (or forced with `--track-usage` / suppressed with `--no-track-usage`). It applies to **Claude Code only** — when Claude Code is not among the tools being set up, the question isn't asked and an explicit `--track-usage` is refused with a note rather than writing Claude Code settings on a run that isn't about Claude Code. When enabled, the CLI mints a **usage key** (`claude_code_telemetry` scope) with your API-scoped key and appends the OTLP exporter env block to the Claude Code settings file at the level you pick — `.claude/settings.json` in the project, or `~/.claude/settings.json` for all projects. An explicit `-g`/`--global` answers the level outright (so `--track-usage -g` runs with no telemetry prompts); otherwise it's asked interactively:
 
 ```json
 {

@@ -4,7 +4,7 @@ import { validateTokenShape, maskToken } from "../util/token.js"
 import { probeMcp } from "../util/mcp-probe.js"
 import { isInteractive } from "../util/tty.js"
 import { attachClientKey, attachPluginKey } from "../util/attach-key.js"
-import { checkProvisioningKey, provisionKey } from "../util/provision.js"
+import { checkProvisioningKey, deleteProvisionedKey, provisionKey } from "../util/provision.js"
 import { resolveTelemetryPlan, writeTelemetryEnv } from "../util/telemetry.js"
 import { findKeyClient, detectKeyClients, KEY_CLIENTS, DEFAULT_KEY_CLIENT } from "../key-clients/index.js"
 import claudeCode from "../integrations/claude-code.js"
@@ -56,6 +56,8 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
   console.log(`Checking the key against ${baseUrl} …`)
   let mcpToken = token
   let provisioningKey: string | undefined
+  let mintedKeyId: string | undefined
+  let mintedKeyName: string | undefined
   const rest = await checkProvisioningKey(baseUrl, token)
   const restRejectedKey = !rest.ok && rest.kind === "auth"
   if (rest.ok) {
@@ -65,12 +67,29 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
       process.exit(1) // nothing written
     }
     provisioningKey = token
+    mintedKeyId = minted.key.id
+    mintedKeyName = minted.key.name
     mcpToken = minted.key.token
     console.log(`  ✓ API-scoped key accepted — minted an MCP key (${maskToken(mcpToken)}) for this machine.`)
   } else if (restRejectedKey) {
     console.log("  Not accepted by the REST API — checking whether it is an MCP-scoped key …")
   } else {
     console.warn(`  Could not reach the REST API (${rest.message}) — trying the key against the MCP endpoint directly.`)
+  }
+
+  // A key that was minted but will now never be attached must not stay live on
+  // the server — the user has no way of knowing it exists (its secret is gone
+  // with this process). Called on every exit path between mint and attach.
+  const discardMintedKey = async (): Promise<void> => {
+    if (!provisioningKey || !mintedKeyId) return
+    if (await deleteProvisionedKey(baseUrl, provisioningKey, mintedKeyId)) {
+      console.error("The MCP key minted just now was deleted again — nothing is left behind.")
+    } else {
+      console.error(
+        `Note: an MCP key named "${mintedKeyName ?? "otx MCP"}" was minted before this failure and could not be ` +
+          "cleaned up — revoke it from the OpenTrace dashboard (it was never written anywhere).",
+      )
+    }
   }
 
   // 5. Validate what will be attached with a real MCP handshake.
@@ -93,6 +112,7 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
       default:
         console.error(`\nHandshake failed: ${probe.message}`)
     }
+    await discardMintedKey()
     process.exit(1) // nothing written
   }
   if (!provisioningKey && restRejectedKey) {
@@ -108,8 +128,13 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     const telemetry = await resolveTelemetryPlan({
       dir: process.cwd(),
       baseUrl,
-      // connect is machine-level onboarding, so the block defaults to user scope.
+      // Deliberately the OPPOSITE default from `install` (project-first):
+      // connect onboards the machine (the plugin itself is written user-scoped
+      // above), so its telemetry block defaults to user scope too. `install`
+      // onboards a project, so it defaults project-side. Both are only the
+      // select's default — an explicit -g wins outright, below.
       isGlobal: opts.global ?? true,
+      explicitGlobal: opts.global,
       interactive: !opts.yes && isInteractive(),
       trackUsage: opts.trackUsage,
       provisioningKey,
@@ -147,6 +172,7 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
       tokenPath = attachPluginKey(claudeCode.plugin, mcpUrl, mcpToken).tokenPath
     } catch (err) {
       console.error(`\nFailed to configure the Claude Code plugin: ${err instanceof Error ? err.message : String(err)}`)
+      await discardMintedKey()
       process.exit(1)
     }
     console.log()
@@ -182,6 +208,7 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     }
   } catch (err) {
     console.error(`\nFailed to write ${client.label} config: ${err instanceof Error ? err.message : String(err)}`)
+    await discardMintedKey()
     process.exit(1)
   }
 

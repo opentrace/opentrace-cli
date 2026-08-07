@@ -80,7 +80,8 @@ export async function checkProvisioningKey(baseUrl: string, token: string): Prom
     }
   }
   if (res.ok) return { ok: true }
-  const detail = parseErrorDetail(await res.text())
+  // Capped for the same reason as in provisionKey: error bodies are untrusted sizes.
+  const detail = parseErrorDetail((await res.text()).slice(0, 4096))
   if (res.status === 401 || res.status === 403) {
     return {
       ok: false,
@@ -118,9 +119,10 @@ export async function provisionKey(
     }
   }
 
-  const body = await res.text()
+  // Error bodies are capped: a proxy in the way can answer with an arbitrarily
+  // large HTML page, and only the first bytes can carry a useful detail anyway.
   if (!res.ok) {
-    const detail = parseErrorDetail(body)
+    const detail = parseErrorDetail((await res.text()).slice(0, 4096))
     if (res.status === 401) {
       return { ok: false, kind: "auth", message: detail ?? "The provisioning key was rejected." }
     }
@@ -130,6 +132,7 @@ export async function provisionKey(
     return { ok: false, kind: "protocol", message: detail ?? `Unexpected HTTP ${res.status} minting a ${scope} key.` }
   }
 
+  const body = await res.text()
   try {
     const parsed = JSON.parse(body) as { id?: string; token?: string; name?: string }
     if (!parsed.token) {
@@ -138,6 +141,30 @@ export async function provisionKey(
     return { ok: true, key: { id: parsed.id ?? "", token: parsed.token, name: parsed.name ?? name } }
   } catch {
     return { ok: false, kind: "protocol", message: "The mint response was not valid JSON." }
+  }
+}
+
+/**
+ * Best-effort deletion of a key that was minted but never attached anywhere —
+ * without this, a failure between mint and attach strands a live credential on
+ * the server that the user does not know exists. Returns false rather than
+ * throwing: cleanup runs on error paths, where a second failure must not mask
+ * the first.
+ */
+export async function deleteProvisionedKey(
+  baseUrl: string,
+  provisioningToken: string,
+  keyId: string,
+): Promise<boolean> {
+  if (!keyId) return false
+  try {
+    const res = await fetch(`${buildApiKeysUrl(baseUrl)}/${keyId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${provisioningToken}` },
+    })
+    return res.status === 204
+  } catch {
+    return false
   }
 }
 

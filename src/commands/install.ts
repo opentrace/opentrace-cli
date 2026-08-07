@@ -356,6 +356,9 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     dir,
     baseUrl,
     isGlobal,
+    // Only the flag counts as explicit — an interactive scope answer above
+    // becomes the default for telemetry's own scope question, not its answer.
+    explicitGlobal: opts.global,
     interactive,
     trackUsage: opts.trackUsage,
     provisioningKey: auth.provisioningKey,

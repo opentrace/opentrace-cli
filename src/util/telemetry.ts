@@ -82,8 +82,11 @@ export function writeTelemetryEnv(
 /**
  * Is a usage key still accepted at the ingest endpoint? Posts an empty OTLP
  * logs export — a no-op batch — because ingest is the only surface that
- * accepts this scope, so there is nothing cheaper to ask. Only an explicit
- * 401/403 condemns the key; anything else says nothing about it.
+ * accepts this scope, so there is nothing cheaper to ask. The server
+ * authenticates at the dependency layer before the body is read, so an empty
+ * batch exercises auth exactly like a real one (verified against a live
+ * instance: valid key → 200, absent key → 401). Only an explicit 401/403
+ * condemns the key; anything else says nothing about it.
  */
 export async function probeTelemetryKey(
   baseUrl: string,
@@ -134,18 +137,29 @@ export async function resolveTelemetryPlan(args: {
   baseUrl: string
   /** Default scope for the env block (the caller's own scope choice). */
   isGlobal: boolean
+  /** Scope stated explicitly on the CLI (-g/--global); set = never prompt for scope. */
+  explicitGlobal?: boolean
   interactive: boolean
   /** Explicit --track-usage / --no-track-usage; undefined = not stated. */
   trackUsage?: boolean
   /** API-scoped key already validated by the key step, if it produced one. */
   provisioningKey?: string
-  /** Gates the interactive prompt — asking about Claude Code usage only makes sense when Claude Code is involved. */
+  /** The env block only means anything to Claude Code — nothing is written (or asked) without it. */
   targetsClaudeCode: boolean
 }): Promise<{ plan?: TelemetryPlan; note?: string }> {
+  // Writing Claude Code settings on a run that is not setting up Claude Code
+  // would be surprising even when asked for explicitly — the flag is refused
+  // loudly rather than honored quietly.
+  if (!args.targetsClaudeCode) {
+    return args.trackUsage
+      ? { note: "--track-usage has no effect here — Claude Code is not among the tools being set up." }
+      : {}
+  }
+
   let want: boolean
   if (args.trackUsage !== undefined) {
     want = args.trackUsage
-  } else if (args.interactive && args.targetsClaudeCode) {
+  } else if (args.interactive) {
     want = await confirm({
       message: "Track Claude Code usage in OpenTrace? (writes OTEL telemetry env into Claude Code settings)",
       default: true,
@@ -156,24 +170,29 @@ export async function resolveTelemetryPlan(args: {
   }
   if (!want) return {}
 
-  const isGlobalScope = args.interactive
-    ? await select({
-        message: "Where should usage tracking be configured?",
-        choices: [
-          {
-            name: "Just this project",
-            value: false,
-            description: claudeSettingsPath(args.dir, { global: false }),
-          },
-          {
-            name: "All projects",
-            value: true,
-            description: claudeSettingsPath(args.dir, { global: true }),
-          },
-        ],
-        default: args.isGlobal,
-      })
-    : args.isGlobal
+  // An explicitly stated scope is final; the prompt only exists for the case
+  // where "at which level?" was genuinely never answered. Interactive answers
+  // from the caller's own scope question arrive as the select's default.
+  const isGlobalScope =
+    args.explicitGlobal ??
+    (args.interactive
+      ? await select({
+          message: "Where should usage tracking be configured?",
+          choices: [
+            {
+              name: "Just this project",
+              value: false,
+              description: claudeSettingsPath(args.dir, { global: false }),
+            },
+            {
+              name: "All projects",
+              value: true,
+              description: claudeSettingsPath(args.dir, { global: true }),
+            },
+          ],
+          default: args.isGlobal,
+        })
+      : args.isGlobal)
   const configPath = claudeSettingsPath(args.dir, { global: isGlobalScope })
 
   // 1. A usage key already in the target file, if it still authenticates.
