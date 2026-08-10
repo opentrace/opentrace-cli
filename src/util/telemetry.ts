@@ -109,7 +109,7 @@ export async function probeTelemetryKey(
 }
 
 // ---------------------------------------------------------------------------
-// Usage-key provisioning (get-or-create, authenticated by the CLI key)
+// Usage-key provisioning (authenticated by the CLI key)
 // ---------------------------------------------------------------------------
 
 export type UsageKeyResult =
@@ -140,16 +140,18 @@ function parseErrorDetail(body: string): string | null {
 }
 
 /**
- * Get-or-create the Claude Code usage key, authenticated by the CLI key.
- * The server owns naming and dedupe (keys it auto-creates are flagged as
- * such), so this sends no body — one CLI key maps to one usage key, and
- * re-runs converge on it server-side.
+ * Provision the Claude Code usage key, authenticated by the CLI key. The
+ * server owns naming and flags the key auto-created; secrets are stored
+ * hashed, so every call mints a fresh key (`created` is always true today —
+ * false is reserved should reuse semantics ever become possible). Re-runs
+ * converge because the CALLER keeps a still-valid key from the settings file
+ * instead of calling this again.
  *
  * A 404 means the server predates this endpoint — reported as its own kind
  * so callers can say "server doesn't support this yet" instead of implying
  * the key was rejected.
  */
-export async function getOrCreateUsageKey(baseUrl: string, cliToken: string): Promise<UsageKeyResult> {
+export async function provisionUsageKey(baseUrl: string, cliToken: string): Promise<UsageKeyResult> {
   const url = buildTelemetryKeyUrl(baseUrl)
   let res: Response
   try {
@@ -209,9 +211,10 @@ export interface TelemetryPlan {
  * happens here, before any file is written; the caller applies the plan.
  *
  * Key acquisition order: a valid usage key already in the target file is kept
- * (no server round-trip); otherwise the get-or-create endpoint is called with
- * the CLI key from the key step, or with one prompted for here — the server
- * dedupes auto-created keys, so re-runs converge instead of sprawling.
+ * (no server round-trip — this check is what keeps re-runs from minting key
+ * after key, since the server provisions a fresh one per call); otherwise the
+ * usage-key endpoint is called with the CLI key from the key step, or with
+ * one prompted for here.
  */
 export async function resolveTelemetryPlan(args: {
   dir: string
@@ -320,7 +323,7 @@ export async function resolveTelemetryPlan(args: {
     }
   }
 
-  const usage = await getOrCreateUsageKey(args.baseUrl, cliToken)
+  const usage = await provisionUsageKey(args.baseUrl, cliToken)
   if (!usage.ok) {
     return { note: `Usage tracking skipped — ${usage.message}` }
   }

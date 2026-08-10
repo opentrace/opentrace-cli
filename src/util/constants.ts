@@ -21,13 +21,15 @@ export function toBaseUrl(input: string): string {
 }
 
 /**
- * Endpoint that get-or-creates the Claude Code usage (telemetry) key.
+ * Endpoint that provisions the Claude Code usage (telemetry) key.
  * Authenticates with the CLI key — the same otk_ key that authenticates the
- * MCP mount. Single source of truth for the path: the server side is being
- * built against this contract, so a path change happens here and nowhere else.
+ * MCP mount. Matches opentrace-api's `provision_claude_code_usage_key`
+ * (200 {token, created, id, name}); every call mints a fresh key (secrets are
+ * stored hashed), so the CLI's reuse of a still-valid key in the settings
+ * file is what keeps re-runs from sprawling.
  */
 export function buildTelemetryKeyUrl(baseUrl: string): string {
-  return `${toBaseUrl(baseUrl)}/claude-code-telemetry/key`
+  return `${toBaseUrl(baseUrl)}/claude-code-usage/key`
 }
 
 /**

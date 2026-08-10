@@ -19,7 +19,7 @@ npm install -g @opentrace/cli
 otx connect otk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-The key you paste is your **CLI key**, issued from the OpenTrace dashboard. It wires your client (Claude Code by default) to talk to OpenTrace with **tenant-global** reach — every environment and workspace the key's owner can see. The CLI then asks whether you want to **track Claude Code usage** in OpenTrace; say yes and it uses the same CLI key to get-or-create a **usage key** (`claude_code_telemetry` scope) and writes the OTEL telemetry env block into your Claude Code settings. Restart the client, and the model can discover workspaces and operate on any of them.
+The key you paste is your **CLI key**, issued from the OpenTrace dashboard. It wires your client (Claude Code by default) to talk to OpenTrace with **tenant-global** reach — every environment and workspace the key's owner can see. The CLI then asks whether you want to **track Claude Code usage** in OpenTrace; say yes and it uses the same CLI key to provision a **usage key** (`claude_code_telemetry` scope) and writes the OTEL telemetry env block into your Claude Code settings. Restart the client, and the model can discover workspaces and operate on any of them.
 
 ## Commands
 
@@ -147,7 +147,7 @@ The CLI key goes into a **user-scoped** file in your home directory (never a com
 
 ## Usage tracking (Claude Code telemetry)
 
-Opt-in, asked during `connect`/`install` (or forced with `--track-usage` / suppressed with `--no-track-usage`). It applies to **Claude Code only** — when Claude Code is not among the tools being set up, the question isn't asked and an explicit `--track-usage` is refused with a note rather than writing Claude Code settings on a run that isn't about Claude Code. When enabled, the CLI calls the usage-key endpoint with your CLI key to **get-or-create a usage key** (`claude_code_telemetry` scope; the server names it and dedupes, so re-runs converge on one key instead of sprawling) and appends the OTLP exporter env block to the Claude Code settings file at the level you pick — `.claude/settings.json` in the project, or `~/.claude/settings.json` for all projects. An explicit `-g`/`--global` answers the level outright (so `--track-usage -g` runs with no telemetry prompts); otherwise it's asked interactively:
+Opt-in, asked during `connect`/`install` (or forced with `--track-usage` / suppressed with `--no-track-usage`). It applies to **Claude Code only** — when Claude Code is not among the tools being set up, the question isn't asked and an explicit `--track-usage` is refused with a note rather than writing Claude Code settings on a run that isn't about Claude Code. When enabled, the CLI calls the usage-key endpoint with your CLI key to **provision a usage key** (`claude_code_telemetry` scope; the server names it "Claude Code usage" and flags it auto-created in your key list) and appends the OTLP exporter env block to the Claude Code settings file at the level you pick — `.claude/settings.json` in the project, or `~/.claude/settings.json` for all projects. An explicit `-g`/`--global` answers the level outright (so `--track-usage -g` runs with no telemetry prompts); otherwise it's asked interactively:
 
 ```json
 {
@@ -163,7 +163,7 @@ Opt-in, asked during `connect`/`install` (or forced with `--track-usage` / suppr
 }
 ```
 
-Existing `env` entries are preserved. The ingest endpoint follows the same host as everything else — pass `--url`/`--base-url` and it moves too. On re-runs, a usage key already in the target file is revalidated against the ingest endpoint and kept if still good; a rejected one is replaced via get-or-create.
+Existing `env` entries are preserved. The ingest endpoint follows the same host as everything else — pass `--url`/`--base-url` and it moves too. On re-runs, a usage key already in the target file is revalidated against the ingest endpoint and kept if still good — that check is what keeps re-runs converging on one key (the server mints a fresh key per provisioning call); a rejected one is replaced with a fresh key.
 
 The usage key can only *write* telemetry (it is refused by the MCP and REST surfaces), so a leak from a committed `.claude/settings.json` cannot read your graph — but pick "All projects" if you'd rather keep it out of the repo entirely.
 
@@ -172,7 +172,7 @@ The usage key can only *write* telemetry (it is refused by the MCP and REST surf
 All OpenTrace keys look the same (`otk_` + 43 chars); the **scope** chosen when a key is created decides which surface accepts it:
 
 - **CLI key** — issued from the OpenTrace dashboard; this is the key you hand to the CLI. It authenticates the MCP mount (bearer header on every request, tenant-global reach — this is what lands in your client config / plugin token file) and the usage-key endpoint. Validated via an MCP handshake.
-- **Usage key** (`claude_code_telemetry` scope) — get-or-created by the CLI (with your CLI key) when you enable usage tracking; accepted only by the telemetry ingest endpoint, so a leak cannot read anything.
+- **Usage key** (`claude_code_telemetry` scope) — provisioned by the CLI (with your CLI key) when you enable usage tracking; accepted only by the telemetry ingest endpoint, so a leak cannot read anything.
 - **OAuth** (`install` / `connect <path>` when you leave the key prompt blank) — the AI tool performs the OAuth handshake against the MCP endpoint itself; the CLI stores no token. Run `/mcp` in Claude Code and sign in.
 
 The **Claude Code plugin supports both** a key and OAuth, and `otx install` can set up either: skip the key prompt for OAuth, or paste a key (or pass `--api-key`) — the same result as `otx connect otk_… --client claude-code`. With a key present the plugin authenticates by header; without one it uses OAuth.
