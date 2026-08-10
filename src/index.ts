@@ -33,7 +33,7 @@ function addInstallOptions(cmd: Command): Command {
   cmd
     .option("--base-url <url>", "OpenTrace API base URL", DEFAULT_BASE_URL)
     .option("--url <url>", "OpenTrace MCP endpoint (overrides --base-url; fed to the plugin's mcp_url)")
-    .option("--api-key <key>", "API-scoped key (otk_…) used to provision the per-surface keys; skips the interactive key prompt")
+    .option("--api-key <key>", "CLI key (otk_…) to attach; skips the interactive key prompt")
     .option("--track-usage", "Enable Claude Code usage tracking (OTEL telemetry env) without asking; requires Claude Code among the targets. With -g the level is settled too (no prompts)")
     .option("--no-track-usage", "Skip Claude Code usage tracking without asking")
     .option("-y, --yes", "Skip prompts: use detected tools, project scope, and any key already stored")

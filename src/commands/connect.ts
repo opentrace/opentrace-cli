@@ -4,7 +4,6 @@ import { validateTokenShape, maskToken } from "../util/token.js"
 import { probeMcp } from "../util/mcp-probe.js"
 import { isInteractive } from "../util/tty.js"
 import { attachClientKey, attachPluginKey } from "../util/attach-key.js"
-import { checkProvisioningKey, deleteProvisionedKey, provisionKey } from "../util/provision.js"
 import { resolveTelemetryPlan, writeTelemetryEnv } from "../util/telemetry.js"
 import { findKeyClient, detectKeyClients, KEY_CLIENTS, DEFAULT_KEY_CLIENT } from "../key-clients/index.js"
 import claudeCode from "../integrations/claude-code.js"
@@ -21,17 +20,17 @@ interface ConnectKeyOptions {
 const DISCOVERY_TOOLS = ["workspaces_list", "environments_list"]
 
 /**
- * `otx connect otk_<token>` — connect a client to the tenant-global OpenTrace
- * MCP endpoint. The pasted key is normally an API-scoped key: it is spent on
- * minting an mcp-scoped key via REST, and that minted key is what gets written
- * into the client's config. An mcp-scoped key pasted directly (the pre-scopes
- * behavior) is detected and attached as-is. Never echoes any token.
+ * `otx connect otk_<token>` — authenticate a client to the tenant-global
+ * OpenTrace MCP endpoint with a CLI key. Validates the key by an MCP handshake,
+ * then writes the client's MCP config with the bearer header. The same key
+ * authenticates the usage-key endpoint for the optional usage-tracking step.
+ * Never echoes the token.
  */
 export async function connectWithKey(token: string, opts: ConnectKeyOptions): Promise<void> {
   // 1. Fail fast on shape — cheap and offline.
   const shapeError = validateTokenShape(token)
   if (shapeError) {
-    console.error(`Invalid API key: ${shapeError}`)
+    console.error(`Invalid CLI key: ${shapeError}`)
     process.exit(1)
   }
 
@@ -49,52 +48,9 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     process.exit(1)
   }
 
-  // 4. Classify the key. REST accepting it makes it an API-scoped key — mint
-  //    the mcp-scoped key that actually gets attached. REST rejecting it may
-  //    still mean an mcp-scoped key pasted directly; the MCP handshake below
-  //    settles that.
-  console.log(`Checking the key against ${baseUrl} …`)
-  let mcpToken = token
-  let provisioningKey: string | undefined
-  let mintedKeyId: string | undefined
-  let mintedKeyName: string | undefined
-  const rest = await checkProvisioningKey(baseUrl, token)
-  const restRejectedKey = !rest.ok && rest.kind === "auth"
-  if (rest.ok) {
-    const minted = await provisionKey(baseUrl, token, "mcp")
-    if (!minted.ok) {
-      console.error(`\nKey accepted, but minting an MCP key failed: ${minted.message}`)
-      process.exit(1) // nothing written
-    }
-    provisioningKey = token
-    mintedKeyId = minted.key.id
-    mintedKeyName = minted.key.name
-    mcpToken = minted.key.token
-    console.log(`  ✓ API-scoped key accepted — minted an MCP key (${maskToken(mcpToken)}) for this machine.`)
-  } else if (restRejectedKey) {
-    console.log("  Not accepted by the REST API — checking whether it is an MCP-scoped key …")
-  } else {
-    console.warn(`  Could not reach the REST API (${rest.message}) — trying the key against the MCP endpoint directly.`)
-  }
-
-  // A key that was minted but will now never be attached must not stay live on
-  // the server — the user has no way of knowing it exists (its secret is gone
-  // with this process). Called on every exit path between mint and attach.
-  const discardMintedKey = async (): Promise<void> => {
-    if (!provisioningKey || !mintedKeyId) return
-    if (await deleteProvisionedKey(baseUrl, provisioningKey, mintedKeyId)) {
-      console.error("The MCP key minted just now was deleted again — nothing is left behind.")
-    } else {
-      console.error(
-        `Note: an MCP key named "${mintedKeyName ?? "otx MCP"}" was minted before this failure and could not be ` +
-          "cleaned up — revoke it from the OpenTrace dashboard (it was never written anywhere).",
-      )
-    }
-  }
-
-  // 5. Validate what will be attached with a real MCP handshake.
-  console.log(`Validating the MCP key against ${mcpUrl} …`)
-  const probe = await probeMcp(mcpUrl, mcpToken)
+  // 4. Validate the key with a real MCP handshake (the CLI key's home surface).
+  console.log(`Validating key against ${mcpUrl} …`)
+  const probe = await probeMcp(mcpUrl, token)
   if (!probe.ok) {
     switch (probe.kind) {
       case "auth":
@@ -112,11 +68,7 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
       default:
         console.error(`\nHandshake failed: ${probe.message}`)
     }
-    await discardMintedKey()
     process.exit(1) // nothing written
-  }
-  if (!provisioningKey && restRejectedKey) {
-    console.log("  ✓ MCP-scoped key — attaching it directly. (Minting a usage key needs an API-scoped key.)")
   }
 
   const hasDiscovery = DISCOVERY_TOOLS.some((t) => probe.tools.includes(t))
@@ -137,7 +89,7 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
       explicitGlobal: opts.global,
       interactive: !opts.yes && isInteractive(),
       trackUsage: opts.trackUsage,
-      provisioningKey,
+      cliToken: token,
       targetsClaudeCode: clientId === "claude-code",
     })
     if (telemetry.note) console.log(`\n${telemetry.note}`)
@@ -156,7 +108,7 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     }
   }
 
-  // 6a. Claude Code: the plugin supersedes a bare MCP entry, so attach the key to
+  // 5a. Claude Code: the plugin supersedes a bare MCP entry, so attach the key to
   //     the plugin — seed its mcp_url and drop the key in the headersHelper token
   //     file. No direct ~/.claude.json header, no keychain (the token file is the
   //     plugin's source of truth; `disconnect --plugin` clears it).
@@ -169,14 +121,13 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     let tokenPath: string
     try {
       settingsPath = claudeCode.plugin.install(os.homedir(), { global: true }).configPath
-      tokenPath = attachPluginKey(claudeCode.plugin, mcpUrl, mcpToken).tokenPath
+      tokenPath = attachPluginKey(claudeCode.plugin, mcpUrl, token).tokenPath
     } catch (err) {
       console.error(`\nFailed to configure the Claude Code plugin: ${err instanceof Error ? err.message : String(err)}`)
-      await discardMintedKey()
       process.exit(1)
     }
     console.log()
-    console.log(`✓ Connected Claude Code (plugin) to OpenTrace (${maskToken(mcpToken)})`)
+    console.log(`✓ Connected Claude Code (plugin) to OpenTrace (${maskToken(token)})`)
     console.log(`  Endpoint:  ${mcpUrl}`)
     console.log(`  Plugin:    ${settingsPath}`)
     console.log(`  Key file:  ${tokenPath} (0600)`)
@@ -186,12 +137,12 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     await maybeSetupUsageTracking()
 
     console.log()
-    console.log("Restart Claude Code (or /reload-plugins) to activate — the plugin authenticates with your API key.")
-    console.log("Heads up: API keys can expire or be revoked — if calls start returning 401, reconnect with a fresh key.")
+    console.log("Restart Claude Code (or /reload-plugins) to activate — the plugin authenticates with your CLI key.")
+    console.log("Heads up: keys can expire or be revoked — if calls start returning 401, reconnect with a fresh key.")
     return
   }
 
-  // 6b. Cursor / Claude Desktop: write the MCP entry with the bearer header
+  // 5b. Cursor / Claude Desktop: write the MCP entry with the bearer header
   //     directly, then record the key in the OS keychain (otx's own record).
   //     The keychain write is best-effort — the client config already carries
   //     the token, so a miss doesn't break the connection; just warn.
@@ -199,7 +150,7 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
   let configPath: string
   let keychainStored = false
   try {
-    const attached = attachClientKey(client, mcpUrl, mcpToken)
+    const attached = attachClientKey(client, mcpUrl, token)
     configPath = attached.configPath
     note = attached.note
     keychainStored = attached.keychainStored
@@ -208,13 +159,12 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     }
   } catch (err) {
     console.error(`\nFailed to write ${client.label} config: ${err instanceof Error ? err.message : String(err)}`)
-    await discardMintedKey()
     process.exit(1)
   }
 
-  // 7. Report success — tenant-global, token masked.
+  // 6. Report success — tenant-global, token masked.
   console.log()
-  console.log(`✓ Connected ${client.label} to OpenTrace (${maskToken(mcpToken)})`)
+  console.log(`✓ Connected ${client.label} to OpenTrace (${maskToken(token)})`)
   console.log(`  Endpoint:  ${mcpUrl}`)
   console.log(`  Config:    ${configPath}`)
   if (keychainStored) console.log("  Key saved to the OS keychain.")
@@ -230,7 +180,7 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
 
   console.log()
   console.log(`Restart ${client.label} to activate the connection.`)
-  console.log("Heads up: API keys can expire or be revoked — if calls start returning 401, reconnect with a fresh key.")
+  console.log("Heads up: keys can expire or be revoked — if calls start returning 401, reconnect with a fresh key.")
 
   // Surface other installed clients the user might also want to connect.
   const others = detectKeyClients().filter((c) => c.id !== client.id)

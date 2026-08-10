@@ -9,7 +9,6 @@ import { probeMcp } from "../util/mcp-probe.js"
 import { getToken, KeychainUnavailableError } from "../util/keychain.js"
 import { readPluginToken } from "../util/plugin-token.js"
 import { attachClientKey, attachPluginKey } from "../util/attach-key.js"
-import { resolveKeyMaterial } from "../util/provision.js"
 import { resolveTelemetryPlan, writeTelemetryEnv } from "../util/telemetry.js"
 import { findKeyClient, hasKeyClientEntry } from "../key-clients/index.js"
 import type { Integration } from "../integrations/types.js"
@@ -139,15 +138,22 @@ interface ResolvedKey {
   source: KeySource
 }
 
+interface KeyCheck {
+  ok: boolean
+  /** True when the key itself was rejected, as opposed to the check not completing. */
+  rejected: boolean
+  message?: string
+}
+
 /**
- * Everything the key step produced. `key` is what MCP clients authenticate
- * with (an mcp-scoped key when it was minted); `provisioningKey` is the
- * API-scoped key that minted it, kept in memory for the usage-tracking step —
- * it is never written anywhere.
+ * Confirm a CLI key with a real MCP handshake. Only a 401 tells us the key is
+ * bad — a network or provisioning failure says nothing about the key, so those
+ * are reported as "unverified" and the key is still used.
  */
-interface ResolvedAuth {
-  key?: ResolvedKey
-  provisioningKey?: string
+async function checkKey(mcpUrl: string, token: string): Promise<KeyCheck> {
+  const probe = await probeMcp(mcpUrl, token)
+  if (probe.ok) return { ok: true, rejected: false }
+  return { ok: false, rejected: probe.kind === "auth", message: probe.message }
 }
 
 /** A key already on this machine from an earlier connect/install, if there is one. */
@@ -169,52 +175,26 @@ const MAX_KEY_ATTEMPTS = 3
 /**
  * Decide what these tools will authenticate with. In order: the `--api-key`
  * flag, a key this machine already holds, then (interactively) a prompt.
- *
- * A supplied key is classified by asking the surfaces (resolveKeyMaterial):
- * an API-scoped key mints a fresh mcp-scoped key on the spot and is kept for
- * the usage-tracking step; an mcp-scoped key is attached directly (how keys
- * worked before scopes, so existing keys keep working). A key this machine
- * already stores is always an mcp-scoped one — that is the only kind the CLI
- * persists — so it is re-checked with an MCP handshake, not REST.
- *
- * Returning no key means the tools fall back to signing in with OAuth from
- * inside the tool, which is a fully supported outcome, not an error.
+ * Every key is a CLI key — one credential authenticates the MCP mount and the
+ * usage-key endpoint alike — validated with an MCP handshake.
+ * Returning undefined means "no key" — the tools fall back to signing in with
+ * OAuth from inside the tool, which is a fully supported outcome, not an error.
  */
-async function resolveAuth(
-  baseUrl: string,
+async function resolveApiKey(
   mcpUrl: string,
   opts: { apiKey?: string; interactive: boolean },
-): Promise<ResolvedAuth> {
-  const classify = async (token: string, source: KeySource): Promise<ResolvedAuth | "rejected"> => {
-    const material = await resolveKeyMaterial(baseUrl, mcpUrl, token)
-    switch (material.kind) {
-      case "provisioned":
-        console.log(`  ✓ API-scoped key accepted — minted an MCP key (${maskToken(material.mcpToken)}) for this machine.`)
-        return {
-          key: { token: material.mcpToken, source },
-          provisioningKey: material.provisioningKey,
-        }
-      case "mcp":
-        if (material.note) console.log(`  ${material.note}`)
-        return { key: { token: material.mcpToken, source } }
-      case "unverified":
-        console.warn(`Note: could not verify the key — ${material.message}`)
-        return { key: { token: material.mcpToken, source } }
-      case "rejected":
-        console.error(`Key rejected: ${material.message}`)
-        return "rejected"
-    }
-  }
-
+): Promise<ResolvedKey | undefined> {
   if (opts.apiKey) {
-    const auth = await classify(opts.apiKey, "flag")
-    if (auth === "rejected") {
+    const check = await checkKey(mcpUrl, opts.apiKey)
+    if (check.rejected) {
       // An explicitly supplied key that the server rejects is a hard failure —
       // proceeding would wire up a connection that cannot work.
+      console.error(`\nKey rejected: ${check.message}`)
       console.error("Re-copy the key, or create a fresh one, then run install again.")
       process.exit(1)
     }
-    return auth
+    if (!check.ok) console.warn(`Note: could not verify the key — ${check.message}`)
+    return { token: opts.apiKey, source: "flag" }
   }
 
   const existing = storedKey(mcpUrl)
@@ -223,28 +203,28 @@ async function resolveAuth(
     // Announced because it costs a network round-trip: without this the command
     // appears to stall before its first output. Worth the wait either way — a
     // revoked key that gets re-attached silently fails on every later call.
-    console.log(`Checking the MCP key stored in your ${where} (${maskToken(existing.token)}) …`)
-    const probe = await probeMcp(mcpUrl, existing.token)
-    if (probe.ok) {
+    console.log(`Checking the CLI key stored in your ${where} (${maskToken(existing.token)}) …`)
+    const check = await checkKey(mcpUrl, existing.token)
+    if (check.ok) {
       console.log(`  ✓ still valid — reusing it.`)
-      return { key: existing }
+      return existing
     }
-    if (probe.kind === "auth") {
+    if (check.rejected) {
       // Expired or revoked — say so and fall through, rather than silently
       // re-attaching a key that returns 401 on every call.
-      console.warn(`The MCP key stored in your ${where} was rejected — ${probe.message}`)
+      console.warn(`The CLI key stored in your ${where} was rejected — ${check.message}`)
     } else {
-      console.warn(`Could not verify the stored MCP key — ${probe.message}`)
-      return { key: existing }
+      console.warn(`Could not verify the stored CLI key — ${check.message}`)
+      return existing
     }
   }
 
-  if (!opts.interactive) return {}
+  if (!opts.interactive) return undefined
 
   for (let attempt = 1; attempt <= MAX_KEY_ATTEMPTS; attempt++) {
     const entered = (
       await password({
-        message: "OpenTrace API key (otk_…) — leave blank to sign in from your tool instead:",
+        message: "OpenTrace CLI key (otk_…) — leave blank to sign in from your tool instead:",
         mask: "•",
         validate: (value: string) => {
           const trimmed = value.trim()
@@ -254,16 +234,20 @@ async function resolveAuth(
       })
     ).trim()
 
-    if (!entered) return {}
+    if (!entered) return undefined
 
-    const auth = await classify(entered, "prompt")
-    if (auth !== "rejected") return auth
+    const check = await checkKey(mcpUrl, entered)
+    if (check.ok || !check.rejected) {
+      if (!check.ok) console.warn(`Note: could not verify the key — ${check.message}`)
+      return { token: entered, source: "prompt" }
+    }
+    console.error(`Key rejected: ${check.message}`)
     if (attempt === MAX_KEY_ATTEMPTS) {
       console.log("Continuing without a key — sign in from your tool with /mcp instead.")
-      return {}
+      return undefined
     }
   }
-  return {}
+  return undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -345,10 +329,8 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   }
 
   // 3. How they authenticate. Asked once and applied to every selected tool.
-  //    An API-scoped key is spent on minting an mcp-scoped `key` here and is
-  //    carried forward (in memory only) for the usage-tracking step.
-  const auth = await resolveAuth(baseUrl, mcpUrl, { apiKey: opts.apiKey, interactive })
-  const key = auth.key
+  //    The same CLI key later authenticates the usage-key endpoint.
+  const key = await resolveApiKey(mcpUrl, { apiKey: opts.apiKey, interactive })
 
   // 4. Usage tracking. Decided and provisioned up front so every prompt and
   //    network round-trip happens before the first file is written.
@@ -361,7 +343,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     explicitGlobal: opts.global,
     interactive,
     trackUsage: opts.trackUsage,
-    provisioningKey: auth.provisioningKey,
+    cliToken: key?.token,
     targetsClaudeCode: targets.some((i) => i.id === "claude-code"),
   })
 
@@ -515,7 +497,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
 
   console.log()
   console.log(`  Endpoint:  ${mcpUrl}`)
-  if (attachedKey) console.log(`  MCP key:   ${maskToken(attachedKey.token)}`)
+  if (attachedKey) console.log(`  CLI key:   ${maskToken(attachedKey.token)}`)
   if (telemetry.plan) console.log(`  Usage:     ${buildIngestUrl(baseUrl)}`)
 
   for (const note of notes) {

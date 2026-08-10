@@ -20,9 +20,14 @@ export function toBaseUrl(input: string): string {
   return input.trim().replace(/\/+$/, "").replace(/\/mcp\/v1$/, "")
 }
 
-/** REST endpoint for minting per-surface API keys. */
-export function buildApiKeysUrl(baseUrl: string): string {
-  return `${toBaseUrl(baseUrl)}/api-keys`
+/**
+ * Endpoint that get-or-creates the Claude Code usage (telemetry) key.
+ * Authenticates with the CLI key — the same otk_ key that authenticates the
+ * MCP mount. Single source of truth for the path: the server side is being
+ * built against this contract, so a path change happens here and nowhere else.
+ */
+export function buildTelemetryKeyUrl(baseUrl: string): string {
+  return `${toBaseUrl(baseUrl)}/claude-code-telemetry/key`
 }
 
 /**

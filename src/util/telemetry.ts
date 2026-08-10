@@ -9,9 +9,8 @@ import os from "node:os"
 import path from "node:path"
 import { confirm, password, select } from "@inquirer/prompts"
 import { readJsonConfig, writeJsonConfig } from "./json-config.js"
-import { buildIngestUrl } from "./constants.js"
+import { buildIngestUrl, buildTelemetryKeyUrl } from "./constants.js"
 import { TOKEN_REGEX, maskToken, validateTokenShape } from "./token.js"
-import { checkProvisioningKey, provisionKey } from "./provision.js"
 
 interface ClaudeSettings {
   env?: Record<string, string>
@@ -110,6 +109,89 @@ export async function probeTelemetryKey(
 }
 
 // ---------------------------------------------------------------------------
+// Usage-key provisioning (get-or-create, authenticated by the CLI key)
+// ---------------------------------------------------------------------------
+
+export type UsageKeyResult =
+  | { ok: true; token: string; created?: boolean }
+  | { ok: false; kind: "auth" | "unsupported" | "network" | "protocol"; message: string }
+
+/** Pull a human-readable reason out of a REST error body (bounded — untrusted size). */
+function parseErrorDetail(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body.slice(0, 4096)) as {
+      detail?: unknown
+      message?: string
+      error?: string
+      error_description?: string
+    }
+    if (typeof parsed.detail === "string") return parsed.detail
+    if (parsed.detail && typeof parsed.detail === "object") {
+      const message = (parsed.detail as { message?: string }).message
+      if (message) return message
+    }
+    if (parsed.message) return parsed.message
+    if (parsed.error_description) return parsed.error_description
+    if (parsed.error) return parsed.error
+  } catch {
+    /* not JSON */
+  }
+  return null
+}
+
+/**
+ * Get-or-create the Claude Code usage key, authenticated by the CLI key.
+ * The server owns naming and dedupe (keys it auto-creates are flagged as
+ * such), so this sends no body — one CLI key maps to one usage key, and
+ * re-runs converge on it server-side.
+ *
+ * A 404 means the server predates this endpoint — reported as its own kind
+ * so callers can say "server doesn't support this yet" instead of implying
+ * the key was rejected.
+ */
+export async function getOrCreateUsageKey(baseUrl: string, cliToken: string): Promise<UsageKeyResult> {
+  const url = buildTelemetryKeyUrl(baseUrl)
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cliToken}`, Accept: "application/json" },
+    })
+  } catch (err) {
+    return {
+      ok: false,
+      kind: "network",
+      message: `Could not reach ${url} — ${err instanceof Error ? err.message : String(err)}`,
+    }
+  }
+
+  if (!res.ok) {
+    const detail = parseErrorDetail(await res.text())
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, kind: "auth", message: detail ?? "The CLI key was not accepted for usage-key provisioning." }
+    }
+    if (res.status === 404 || res.status === 405) {
+      return {
+        ok: false,
+        kind: "unsupported",
+        message: "This OpenTrace server does not support usage-key provisioning yet.",
+      }
+    }
+    return { ok: false, kind: "protocol", message: detail ?? `Unexpected HTTP ${res.status} from ${url}.` }
+  }
+
+  try {
+    const parsed = JSON.parse(await res.text()) as { token?: string; created?: boolean }
+    if (!parsed.token) {
+      return { ok: false, kind: "protocol", message: "The usage-key response carried no key secret." }
+    }
+    return { ok: true, token: parsed.token, created: parsed.created }
+  } catch {
+    return { ok: false, kind: "protocol", message: "The usage-key response was not valid JSON." }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Planning
 // ---------------------------------------------------------------------------
 
@@ -123,14 +205,13 @@ export interface TelemetryPlan {
 
 /**
  * Decide whether — and into which settings file — the Claude Code OTEL env
- * block goes, and secure a usage key for it. All prompting and minting happens
- * here, before any file is written; the caller applies the returned plan.
+ * block goes, and secure a usage key for it. All prompting and provisioning
+ * happens here, before any file is written; the caller applies the plan.
  *
  * Key acquisition order: a valid usage key already in the target file is kept
- * (minting on every re-run would sprawl keys); otherwise one is minted with
- * the API-scoped key from the key step, or with one prompted for here — a
- * usage key's secret is only ever readable from the settings file itself, so
- * there is nowhere else to recover one from.
+ * (no server round-trip); otherwise the get-or-create endpoint is called with
+ * the CLI key from the key step, or with one prompted for here — the server
+ * dedupes auto-created keys, so re-runs converge instead of sprawling.
  */
 export async function resolveTelemetryPlan(args: {
   dir: string
@@ -142,8 +223,8 @@ export async function resolveTelemetryPlan(args: {
   interactive: boolean
   /** Explicit --track-usage / --no-track-usage; undefined = not stated. */
   trackUsage?: boolean
-  /** API-scoped key already validated by the key step, if it produced one. */
-  provisioningKey?: string
+  /** The CLI key the key step resolved (the same key that authenticates MCP), if any. */
+  cliToken?: string
   /** The env block only means anything to Claude Code — nothing is written (or asked) without it. */
   targetsClaudeCode: boolean
 }): Promise<{ plan?: TelemetryPlan; note?: string }> {
@@ -212,13 +293,14 @@ export async function resolveTelemetryPlan(args: {
     console.warn("The usage key already configured was rejected at the ingest endpoint — minting a fresh one.")
   }
 
-  // 2. Mint one. Needs an API-scoped key; the key step may not have produced
-  //    one (stored-key reuse, an mcp-scoped key, or no key at all).
-  let provisioningKey = args.provisioningKey
-  if (!provisioningKey && args.interactive) {
+  // 2. Get-or-create one with the CLI key. The key step may not have produced
+  //    a key (the OAuth path) — offer to take one here, since the usage key
+  //    cannot be provisioned any other way.
+  let cliToken = args.cliToken
+  if (!cliToken && args.interactive) {
     const entered = (
       await password({
-        message: "API-scoped key (otk_…) to mint the usage key — leave blank to skip usage tracking:",
+        message: "OpenTrace CLI key (otk_…) to set up usage tracking — leave blank to skip:",
         mask: "•",
         validate: (value: string) => {
           const trimmed = value.trim()
@@ -227,27 +309,27 @@ export async function resolveTelemetryPlan(args: {
         },
       })
     ).trim()
-    if (!entered) return { note: "Usage tracking skipped — no API-scoped key to mint a usage key with." }
-    const check = await checkProvisioningKey(args.baseUrl, entered)
-    if (!check.ok) {
-      return { note: `Usage tracking skipped — the key was not accepted by the REST API: ${check.message}` }
-    }
-    provisioningKey = entered
+    if (!entered) return { note: "Usage tracking skipped — it needs a CLI key to provision the usage key." }
+    cliToken = entered
   }
-  if (!provisioningKey) {
+  if (!cliToken) {
     return {
       note:
-        "Usage tracking requested, but there is no API-scoped key to mint a usage key with — " +
-        "re-run with an API-scoped key (OpenTrace dashboard → API keys).",
+        "Usage tracking requested, but there is no CLI key to provision the usage key with — " +
+        "re-run with a key (OpenTrace dashboard → API keys).",
     }
   }
 
-  const minted = await provisionKey(args.baseUrl, provisioningKey, "claude_code_telemetry")
-  if (!minted.ok) {
-    return { note: `Usage tracking skipped — minting the usage key failed: ${minted.message}` }
+  const usage = await getOrCreateUsageKey(args.baseUrl, cliToken)
+  if (!usage.ok) {
+    return { note: `Usage tracking skipped — ${usage.message}` }
   }
-  console.log(`  ✓ minted a usage key (${maskToken(minted.key.token)}) for Claude Code telemetry.`)
+  console.log(
+    usage.created === false
+      ? `  ✓ reusing this CLI key's existing usage key (${maskToken(usage.token)}).`
+      : `  ✓ provisioned a usage key (${maskToken(usage.token)}) for Claude Code telemetry.`,
+  )
   return {
-    plan: { configPath, env: telemetryEnv(args.baseUrl, minted.key.token), reusedExisting: false, isGlobalScope },
+    plan: { configPath, env: telemetryEnv(args.baseUrl, usage.token), reusedExisting: false, isGlobalScope },
   }
 }
