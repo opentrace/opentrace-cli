@@ -2,13 +2,14 @@ import path from "node:path"
 import fs from "node:fs"
 import { checkbox, confirm, password, select } from "@inquirer/prompts"
 import { ALL_INTEGRATIONS, detectInstalled } from "../util/detect.js"
-import { DEFAULT_BASE_URL, buildMcpUrl } from "../util/constants.js"
+import { DEFAULT_BASE_URL, buildMcpUrl, buildIngestUrl } from "../util/constants.js"
 import { isInteractive } from "../util/tty.js"
 import { maskToken, validateTokenShape } from "../util/token.js"
 import { probeMcp } from "../util/mcp-probe.js"
 import { getToken, KeychainUnavailableError } from "../util/keychain.js"
 import { readPluginToken } from "../util/plugin-token.js"
 import { attachClientKey, attachPluginKey } from "../util/attach-key.js"
+import { resolveTelemetryPlan, writeTelemetryEnv } from "../util/telemetry.js"
 import { findKeyClient, hasKeyClientEntry } from "../key-clients/index.js"
 import type { Integration } from "../integrations/types.js"
 
@@ -18,6 +19,8 @@ interface InstallCommandOptions {
   pluginUrl?: string
   /** API key supplied on the command line — the non-interactive form of the key prompt. */
   apiKey?: string
+  /** Explicit --track-usage / --no-track-usage; undefined = not stated (prompt or skip). */
+  trackUsage?: boolean
   yes?: boolean
   global?: boolean
   toolOpts?: Record<string, unknown>
@@ -140,17 +143,16 @@ interface KeyCheck {
   /** True when the key itself was rejected, as opposed to the check not completing. */
   rejected: boolean
   message?: string
-  toolCount?: number
 }
 
 /**
- * Confirm a key with a real MCP handshake. Only a 401 tells us the key is bad —
- * a network or provisioning failure says nothing about the key, so those are
- * reported as "unverified" and the key is still used.
+ * Confirm a CLI key with a real MCP handshake. Only a 401 tells us the key is
+ * bad — a network or provisioning failure says nothing about the key, so those
+ * are reported as "unverified" and the key is still used.
  */
 async function checkKey(mcpUrl: string, token: string): Promise<KeyCheck> {
   const probe = await probeMcp(mcpUrl, token)
-  if (probe.ok) return { ok: true, rejected: false, toolCount: probe.tools.length }
+  if (probe.ok) return { ok: true, rejected: false }
   return { ok: false, rejected: probe.kind === "auth", message: probe.message }
 }
 
@@ -173,6 +175,8 @@ const MAX_KEY_ATTEMPTS = 3
 /**
  * Decide what these tools will authenticate with. In order: the `--api-key`
  * flag, a key this machine already holds, then (interactively) a prompt.
+ * Every key is a CLI key — one credential authenticates the MCP mount and the
+ * usage-key endpoint alike — validated with an MCP handshake.
  * Returning undefined means "no key" — the tools fall back to signing in with
  * OAuth from inside the tool, which is a fully supported outcome, not an error.
  */
@@ -199,7 +203,7 @@ async function resolveApiKey(
     // Announced because it costs a network round-trip: without this the command
     // appears to stall before its first output. Worth the wait either way — a
     // revoked key that gets re-attached silently fails on every later call.
-    console.log(`Checking the API key stored in your ${where} (${maskToken(existing.token)}) …`)
+    console.log(`Checking the CLI key stored in your ${where} (${maskToken(existing.token)}) …`)
     const check = await checkKey(mcpUrl, existing.token)
     if (check.ok) {
       console.log(`  ✓ still valid — reusing it.`)
@@ -208,9 +212,9 @@ async function resolveApiKey(
     if (check.rejected) {
       // Expired or revoked — say so and fall through, rather than silently
       // re-attaching a key that returns 401 on every call.
-      console.warn(`The API key stored in your ${where} was rejected — ${check.message}`)
+      console.warn(`The CLI key stored in your ${where} was rejected — ${check.message}`)
     } else {
-      console.warn(`Could not verify the stored API key — ${check.message}`)
+      console.warn(`Could not verify the stored CLI key — ${check.message}`)
       return existing
     }
   }
@@ -220,7 +224,7 @@ async function resolveApiKey(
   for (let attempt = 1; attempt <= MAX_KEY_ATTEMPTS; attempt++) {
     const entered = (
       await password({
-        message: "OpenTrace API key (otk_…) — leave blank to sign in from your tool instead:",
+        message: "OpenTrace CLI key (otk_…) — leave blank to sign in from your tool instead:",
         mask: "•",
         validate: (value: string) => {
           const trimmed = value.trim()
@@ -325,7 +329,23 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   }
 
   // 3. How they authenticate. Asked once and applied to every selected tool.
+  //    The same CLI key later authenticates the usage-key endpoint.
   const key = await resolveApiKey(mcpUrl, { apiKey: opts.apiKey, interactive })
+
+  // 4. Usage tracking. Decided and provisioned up front so every prompt and
+  //    network round-trip happens before the first file is written.
+  const telemetry = await resolveTelemetryPlan({
+    dir,
+    baseUrl,
+    isGlobal,
+    // Only the flag counts as explicit — an interactive scope answer above
+    // becomes the default for telemetry's own scope question, not its answer.
+    explicitGlobal: opts.global,
+    interactive,
+    trackUsage: opts.trackUsage,
+    cliToken: key?.token,
+    targetsClaudeCode: targets.some((i) => i.id === "claude-code"),
+  })
 
   // Only the flag path asks "overwrite?" per tool. The checkbox already labels
   // which tools are configured and the user selected them anyway, so a confirm
@@ -443,6 +463,27 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     }
   }
 
+  // Apply the usage-tracking plan (its prompts and minting already ran above).
+  if (telemetry.note) notes.push(telemetry.note)
+  if (telemetry.plan) {
+    try {
+      const { existed } = writeTelemetryEnv(telemetry.plan.configPath, telemetry.plan.env)
+      results.push({
+        label: "Claude Code (usage tracking)",
+        configPath: telemetry.plan.configPath,
+        status: existed ? "updated" : "added",
+      })
+      if (!telemetry.plan.isGlobalScope) {
+        notes.push(
+          "Usage tracking: the usage key lands in .claude/settings.json, which is often committed. " +
+            'It is a write-only ingest credential (it cannot read anything), but pick "All projects" if you don\'t want it in the repo.',
+        )
+      }
+    } catch (err) {
+      console.error(`  Claude Code (usage tracking): failed — ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
   if (results.length === 0) return
 
   // The status column is what distinguishes a first write from one that
@@ -456,7 +497,8 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
 
   console.log()
   console.log(`  Endpoint:  ${mcpUrl}`)
-  if (attachedKey) console.log(`  API key:   ${maskToken(attachedKey.token)}`)
+  if (attachedKey) console.log(`  CLI key:   ${maskToken(attachedKey.token)}`)
+  if (telemetry.plan) console.log(`  Usage:     ${buildIngestUrl(baseUrl)}`)
 
   for (const note of notes) {
     console.log()
