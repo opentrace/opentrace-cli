@@ -117,7 +117,7 @@ export type UsageKeyResult =
   | { ok: false; kind: "auth" | "unsupported" | "network" | "protocol"; message: string }
 
 /** Pull a human-readable reason out of a REST error body (bounded — untrusted size). */
-function parseErrorDetail(body: string): string | null {
+export function parseErrorDetail(body: string): string | null {
   try {
     const parsed = JSON.parse(body.slice(0, 4096)) as {
       detail?: unknown

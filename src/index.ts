@@ -3,6 +3,7 @@ import { Command } from "commander"
 import { addMcp } from "./commands/add-mcp.js"
 import { install } from "./commands/install.js"
 import { connectWithKey } from "./commands/connect.js"
+import { login } from "./commands/login.js"
 import { disconnect } from "./commands/disconnect.js"
 import { ALL_INTEGRATIONS } from "./util/detect.js"
 import { DEFAULT_BASE_URL, toBaseUrl, buildMcpUrl } from "./util/constants.js"
@@ -120,6 +121,32 @@ connectCmd
       toolOpts: opts as Record<string, unknown>,
     })
   })
+
+// The browser front end to `connect otk_…`: OAuth sign-in mints the CLI key,
+// then the same probe/attach/usage-tracking machinery takes over. Automation
+// keeps using `connect otk_…` / `install --api-key` — login refuses non-TTY runs.
+const loginCmd = program
+  .command("login")
+  .description("Sign in to OpenTrace in your browser and connect this machine (mints a CLI key)")
+  .option("--base-url <url>", "OpenTrace API base URL", DEFAULT_BASE_URL)
+  .option("--url <url>", "OpenTrace MCP endpoint or host (overrides --base-url)")
+  .option("--client <id>", "Target client for the minted key: claude-code | claude-desktop | cursor")
+  .option("--no-browser", "Don't launch a browser — print the sign-in URL to open manually")
+  .option("--track-usage", "Enable Claude Code usage tracking without asking")
+  .option("--no-track-usage", "Skip Claude Code usage tracking without asking")
+  .option("-g, --global", "User-level scope for the usage-tracking settings file")
+  .option("-y, --yes", "Skip confirmation prompts (a TTY and browser are still required)")
+loginCmd.action(async (opts) => {
+  await login({
+    url: opts.url,
+    baseUrl: opts.baseUrl,
+    client: opts.client,
+    browser: opts.browser,
+    trackUsage: explicitTrackUsage(loginCmd),
+    global: opts.global,
+    yes: opts.yes,
+  })
+})
 
 program
   .command("disconnect [path]")

@@ -55,7 +55,7 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     switch (probe.kind) {
       case "auth":
         console.error(`\nKey rejected: ${probe.message}`)
-        console.error("Re-copy the key, or create a fresh one, then run connect again.")
+        console.error("Re-copy the key, or create a fresh one, then run connect again — or sign in with `otx login`.")
         break
       case "provisioning":
         console.error(`\nTenant not ready: ${probe.message}`)
