@@ -10,6 +10,8 @@ import { getToken, KeychainUnavailableError } from "../util/keychain.js"
 import { readPluginToken } from "../util/plugin-token.js"
 import { attachClientKey, attachPluginKey } from "../util/attach-key.js"
 import { resolveTelemetryPlan, writeTelemetryEnv } from "../util/telemetry.js"
+import { loginWithBrowser } from "../util/oauth/flow.js"
+import { looksHeadless } from "../util/oauth/browser.js"
 import { findKeyClient, hasKeyClientEntry } from "../key-clients/index.js"
 import type { Integration } from "../integrations/types.js"
 
@@ -131,7 +133,7 @@ async function promptTargets(dir: string, isGlobal: boolean): Promise<Integratio
 // API key
 // ---------------------------------------------------------------------------
 
-type KeySource = "flag" | "keychain" | "plugin" | "prompt"
+type KeySource = "flag" | "keychain" | "plugin" | "prompt" | "oauth"
 
 interface ResolvedKey {
   token: string
@@ -174,15 +176,16 @@ const MAX_KEY_ATTEMPTS = 3
 
 /**
  * Decide what these tools will authenticate with. In order: the `--api-key`
- * flag, a key this machine already holds, then (interactively) a prompt.
- * Every key is a CLI key — one credential authenticates the MCP mount and the
- * usage-key endpoint alike — validated with an MCP handshake.
+ * flag, a key this machine already holds, then (interactively) a choice of
+ * browser sign-in (the default — mints a fresh CLI key), pasting a key, or
+ * skipping. Every key is a CLI key — one credential authenticates the MCP
+ * mount and the usage-key endpoint alike — validated with an MCP handshake.
  * Returning undefined means "no key" — the tools fall back to signing in with
  * OAuth from inside the tool, which is a fully supported outcome, not an error.
  */
 async function resolveApiKey(
   mcpUrl: string,
-  opts: { apiKey?: string; interactive: boolean },
+  opts: { apiKey?: string; interactive: boolean; baseUrl: string },
 ): Promise<ResolvedKey | undefined> {
   if (opts.apiKey) {
     const check = await checkKey(mcpUrl, opts.apiKey)
@@ -221,10 +224,56 @@ async function resolveApiKey(
 
   if (!opts.interactive) return undefined
 
+  // Browser sign-in is the interactive default; pasting stays one keystroke
+  // away, and automation (`--api-key`, `connect otk_…`, non-TTY) never lands here.
+  const method = await select({
+    message: "How should these tools authenticate to OpenTrace?",
+    choices: [
+      {
+        name: "Sign in with your browser",
+        value: "browser",
+        description: looksHeadless()
+          ? "Mints a CLI key for this machine (needs a browser on THIS machine — won't work over SSH)"
+          : "Opens the OpenTrace sign-in and mints a CLI key for this machine",
+      },
+      {
+        name: "Paste a CLI key (otk_…)",
+        value: "paste",
+        description: "From the OpenTrace dashboard → API keys",
+      },
+      {
+        name: "Skip — sign in from each tool later",
+        value: "skip",
+        description: "Tools authenticate with OAuth from inside the tool (in Claude Code: /mcp)",
+      },
+    ],
+  })
+  if (method === "skip") return undefined
+
+  if (method === "browser") {
+    const result = await loginWithBrowser({ baseUrl: opts.baseUrl })
+    if (result.ok) {
+      // Same invariant as every other source: a returned key was confirmed
+      // against the MCP mount. This key was minted moments ago, so a rejection
+      // here is a server inconsistency, not a bad paste — warn, don't fail.
+      const check = await checkKey(mcpUrl, result.token)
+      if (!check.ok) {
+        console.warn(
+          check.rejected
+            ? `Note: the freshly minted key was rejected by the MCP endpoint — ${check.message}`
+            : `Note: could not verify the minted key — ${check.message}`,
+        )
+      }
+      return { token: result.token, source: "oauth" }
+    }
+    console.error(result.message)
+    console.log("Falling back to the key prompt — paste a key, or leave blank to skip.")
+  }
+
   for (let attempt = 1; attempt <= MAX_KEY_ATTEMPTS; attempt++) {
     const entered = (
       await password({
-        message: "OpenTrace CLI key (otk_…) — leave blank to sign in from your tool instead:",
+        message: "OpenTrace CLI key (otk_…) — leave blank to skip:",
         mask: "•",
         validate: (value: string) => {
           const trimmed = value.trim()
@@ -330,7 +379,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
 
   // 3. How they authenticate. Asked once and applied to every selected tool.
   //    The same CLI key later authenticates the usage-key endpoint.
-  const key = await resolveApiKey(mcpUrl, { apiKey: opts.apiKey, interactive })
+  const key = await resolveApiKey(mcpUrl, { apiKey: opts.apiKey, interactive, baseUrl })
 
   // 4. Usage tracking. Decided and provisioned up front so every prompt and
   //    network round-trip happens before the first file is written.
