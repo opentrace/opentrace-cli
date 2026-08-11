@@ -3,6 +3,7 @@ import { Command } from "commander"
 import { addMcp } from "./commands/add-mcp.js"
 import { install } from "./commands/install.js"
 import { connectWithKey } from "./commands/connect.js"
+import { login } from "./commands/login.js"
 import { disconnect } from "./commands/disconnect.js"
 import { ALL_INTEGRATIONS } from "./util/detect.js"
 import { DEFAULT_BASE_URL, toBaseUrl, buildMcpUrl } from "./util/constants.js"
@@ -33,13 +34,24 @@ function addInstallOptions(cmd: Command): Command {
   cmd
     .option("--base-url <url>", "OpenTrace API base URL", DEFAULT_BASE_URL)
     .option("--url <url>", "OpenTrace MCP endpoint (overrides --base-url; fed to the plugin's mcp_url)")
-    .option("--api-key <key>", "API key (otk_…) to attach; skips the interactive key prompt")
+    .option("--api-key <key>", "CLI key (otk_…) to attach; skips the interactive key prompt")
+    .option("--track-usage", "Enable Claude Code usage tracking (OTEL telemetry env) without asking; requires Claude Code among the targets. With -g the level is settled too (no prompts)")
+    .option("--no-track-usage", "Skip Claude Code usage tracking without asking")
     .option("-y, --yes", "Skip prompts: use detected tools, project scope, and any key already stored")
     .option("-g, --global", "Install to user-level config instead of project-level")
   ALL_INTEGRATIONS.forEach((i) => {
     cmd.option(`--${i.id}`, `${i.label}: ${i.helpText}`)
   })
   return cmd
+}
+
+/**
+ * Tri-state for --track-usage: commander defaults a defined `--no-` pair to
+ * true, but "not stated" must stay distinguishable so the interactive prompt
+ * can run — only a value the user actually typed counts.
+ */
+function explicitTrackUsage(cmd: Command): boolean | undefined {
+  return cmd.getOptionValueSource("trackUsage") === "cli" ? (cmd.opts().trackUsage as boolean) : undefined
 }
 
 /**
@@ -65,6 +77,7 @@ installCmd.action(async (targetPath: string | undefined, opts) => {
     baseUrl,
     pluginUrl,
     apiKey: opts.apiKey,
+    trackUsage: explicitTrackUsage(installCmd),
     yes: opts.yes,
     global: opts.global,
     toolOpts: opts as Record<string, unknown>,
@@ -88,7 +101,13 @@ connectCmd
       if (opts.apiKey && opts.apiKey !== tokenOrPath) {
         console.warn("Both a key argument and --api-key were given — using the key argument, ignoring --api-key.")
       }
-      await connectWithKey(tokenOrPath, { url: opts.url, client: opts.client })
+      await connectWithKey(tokenOrPath, {
+        url: opts.url,
+        client: opts.client,
+        trackUsage: explicitTrackUsage(connectCmd),
+        global: opts.global,
+        yes: opts.yes,
+      })
       return
     }
     const { baseUrl, pluginUrl } = resolveEndpoint(opts)
@@ -96,11 +115,38 @@ connectCmd
       baseUrl,
       pluginUrl,
       apiKey: opts.apiKey,
+      trackUsage: explicitTrackUsage(connectCmd),
       yes: opts.yes,
       global: opts.global,
       toolOpts: opts as Record<string, unknown>,
     })
   })
+
+// The browser front end to `connect otk_…`: OAuth sign-in mints the CLI key,
+// then the same probe/attach/usage-tracking machinery takes over. Automation
+// keeps using `connect otk_…` / `install --api-key` — login refuses non-TTY runs.
+const loginCmd = program
+  .command("login")
+  .description("Sign in to OpenTrace in your browser and connect this machine (mints a CLI key)")
+  .option("--base-url <url>", "OpenTrace API base URL", DEFAULT_BASE_URL)
+  .option("--url <url>", "OpenTrace MCP endpoint or host (overrides --base-url)")
+  .option("--client <id>", "Target client for the minted key: claude-code | claude-desktop | cursor")
+  .option("--no-browser", "Don't launch a browser — print the sign-in URL to open manually")
+  .option("--track-usage", "Enable Claude Code usage tracking without asking")
+  .option("--no-track-usage", "Skip Claude Code usage tracking without asking")
+  .option("-g, --global", "User-level scope for the usage-tracking settings file")
+  .option("-y, --yes", "Skip confirmation prompts (a TTY and browser are still required)")
+loginCmd.action(async (opts) => {
+  await login({
+    url: opts.url,
+    baseUrl: opts.baseUrl,
+    client: opts.client,
+    browser: opts.browser,
+    trackUsage: explicitTrackUsage(loginCmd),
+    global: opts.global,
+    yes: opts.yes,
+  })
+})
 
 program
   .command("disconnect [path]")
