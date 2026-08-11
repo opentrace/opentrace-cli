@@ -80,10 +80,11 @@ export async function startLoopbackServer(): Promise<LoopbackStart> {
     socket.on("close", () => sockets.delete(socket))
   })
 
-  // listen(0) lets the OS pick a free port, so a collision needs the whole
-  // ephemeral range exhausted — still, retry once on a transient failure.
-  let error = await listenOnce(server)
-  if (error !== null) error = await listenOnce(server)
+  // listen(0) lets the OS pick a free port, so failure here means loopback
+  // networking itself is broken — no retry (an http.Server that failed to
+  // listen is not reliably re-listenable; recovering would need a fresh
+  // instance, for a case that does not happen in practice).
+  const error = await listenOnce(server)
   if (error !== null) {
     return { ok: false, message: `Could not open a local port for the sign-in redirect — ${error}` }
   }
@@ -95,7 +96,10 @@ export async function startLoopbackServer(): Promise<LoopbackStart> {
   const close = (): void => {
     if (closed) return
     closed = true
-    server.close()
+    // The noop callback swallows the already-closed error when finish()'s
+    // graceful close ran first — without it that error is emitted as an
+    // unhandled 'error' event.
+    server.close(() => {})
     for (const socket of sockets) socket.destroy()
   }
 
@@ -107,6 +111,12 @@ export async function startLoopbackServer(): Promise<LoopbackStart> {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        // Stop accepting new connections the moment the wait settles, rather
+        // than relying on the caller's close(). A graceful close (no socket
+        // destruction) lets the in-flight response to the browser flush —
+        // Connection: close ends it right after. The caller's close() still
+        // destroys any straggler.
+        server.close(() => {})
         resolve(result)
       }
       // unref: the open server is what keeps the event loop alive, so once the

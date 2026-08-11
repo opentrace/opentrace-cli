@@ -20,8 +20,13 @@ interface LoginOptions {
   yes?: boolean
 }
 
-/** A key this machine already holds for this endpoint (keychain, then the plugin token file). */
-function storedCliKey(mcpUrl: string): string | undefined {
+/**
+ * A key this machine already holds for this endpoint. The keychain is
+ * endpoint-scoped (keyed by MCP URL); the plugin token file is NOT, so it is
+ * only consulted for the default endpoint — a run pointed at some other
+ * deployment must not probe (or offer to keep) a key minted elsewhere.
+ */
+function storedCliKey(mcpUrl: string, defaultEndpoint: boolean): string | undefined {
   try {
     const fromKeychain = getToken(mcpUrl)
     if (fromKeychain) return fromKeychain
@@ -29,7 +34,7 @@ function storedCliKey(mcpUrl: string): string | undefined {
     // No Secret Service is no reason not to sign in — check the plugin file.
     if (!(err instanceof KeychainUnavailableError)) throw err
   }
-  return readPluginToken()
+  return defaultEndpoint ? readPluginToken() : undefined
 }
 
 /**
@@ -52,7 +57,7 @@ export async function login(opts: LoginOptions): Promise<void> {
   // Every sign-in mints a fresh server-side key, so a machine that already
   // holds a working one is asked before another is minted.
   if (!opts.yes) {
-    const stored = storedCliKey(mcpUrl)
+    const stored = storedCliKey(mcpUrl, baseUrl === DEFAULT_BASE_URL)
     if (stored) {
       console.log(`Checking the CLI key already on this machine (${maskToken(stored)}) …`)
       const probe = await probeMcp(mcpUrl, stored)

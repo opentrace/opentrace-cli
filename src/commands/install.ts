@@ -267,7 +267,13 @@ async function resolveApiKey(
       return { token: result.token, source: "oauth" }
     }
     console.error(result.message)
-    console.log("Falling back to the key prompt — paste a key, or leave blank to skip.")
+    // Where retrying the browser could actually succeed (the user cancelled
+    // or ran out of time), say so — otherwise pasting is the right path.
+    console.log(
+      result.kind === "timeout" || result.kind === "denied"
+        ? "Re-run this command to try the browser again — or paste a key below (leave blank to skip)."
+        : "Falling back to the key prompt — paste a key, or leave blank to skip.",
+    )
   }
 
   for (let attempt = 1; attempt <= MAX_KEY_ATTEMPTS; attempt++) {

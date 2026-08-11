@@ -175,6 +175,11 @@ export async function loginWithBrowser(opts: OauthLoginOptions): Promise<OauthLo
   }
 
   try {
+    // Installed as soon as the port is open — not just around the wait — so a
+    // Ctrl-C during client registration or the browser hand-off also closes
+    // the server and exits cleanly. Removed in the finally below.
+    process.once("SIGINT", onSigint)
+
     const registered = await registerClient(auth, server.redirectUri)
     if (!registered.ok) return registered
 
@@ -210,7 +215,6 @@ export async function loginWithBrowser(opts: OauthLoginOptions): Promise<OauthLo
     }
 
     console.log(`Waiting for sign-in (times out in ${formatTimeout(timeoutMs)}, Ctrl-C to cancel) …`)
-    process.once("SIGINT", onSigint)
     const callback = await server.waitForCallback(state, timeoutMs)
     if (!callback.ok) {
       const kind = callback.kind === "server" ? "protocol" : callback.kind

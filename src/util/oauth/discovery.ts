@@ -47,8 +47,19 @@ async function fetchMetadata(url: string): Promise<FetchMetadataResult> {
   if (!res.ok) {
     return { ok: false, kind: "protocol", message: `Unexpected HTTP ${res.status} from ${url}.` }
   }
+  // Reject oversized documents outright (declared size first, actual size
+  // after reading) instead of truncating — parsing a truncated fragment would
+  // misreport a valid-but-large document as "not valid JSON".
+  const declaredSize = Number(res.headers.get("content-length") ?? "0")
+  if (declaredSize > MAX_METADATA_BYTES) {
+    return { ok: false, kind: "protocol", message: `The metadata at ${url} is implausibly large (${declaredSize} bytes).` }
+  }
+  const text = await res.text()
+  if (text.length > MAX_METADATA_BYTES) {
+    return { ok: false, kind: "protocol", message: `The metadata at ${url} is implausibly large (${text.length} bytes).` }
+  }
   try {
-    const body = JSON.parse((await res.text()).slice(0, MAX_METADATA_BYTES)) as Record<string, unknown>
+    const body = JSON.parse(text) as Record<string, unknown>
     return { ok: true, body }
   } catch {
     return { ok: false, kind: "protocol", message: `The metadata at ${url} was not valid JSON.` }
@@ -87,6 +98,10 @@ export async function discoverAuthServer(baseUrl: string): Promise<DiscoveryResu
     return { ok: false, kind: "unsupported", message: UNSUPPORTED_MESSAGE }
   }
 
+  // An absent code_challenge_methods_supported is deliberately allowed: per
+  // RFC 8414 absence only means unadvertised, and the flow always sends S256 —
+  // an AS that truly lacks it rejects the authorize request. Only an explicit
+  // list without S256 is a known-broken configuration worth failing early on.
   const challengeMethods = meta.code_challenge_methods_supported
   if (Array.isArray(challengeMethods) && !challengeMethods.includes("S256")) {
     return { ok: false, kind: "protocol", message: "The authorization server does not support PKCE S256." }
