@@ -1,8 +1,13 @@
-// Claude Code usage tracking: the OTEL exporter env block in a Claude Code
+// Claude Code usage monitoring: the OTEL exporter env block in a Claude Code
 // settings.json. The credential inside is a claude_code_telemetry-scoped key —
 // a write-only ingest credential by design (it cannot read the graph or the
 // REST surface), which is why, unlike MCP keys, it is allowed to live in a
 // project-scoped settings file when the user picks that scope.
+//
+// Wording here deliberately matches the dashboard's own setup flow ("Monitor
+// your Claude Code usage", "counts, not content"). This is the reader watching
+// their own usage on their own dashboard, and copy that reads like OpenTrace
+// collecting telemetry for itself describes the wrong thing entirely.
 
 import fs from "node:fs"
 import os from "node:os"
@@ -11,11 +16,21 @@ import { confirm, password, select } from "@inquirer/prompts"
 import { readJsonConfig, writeJsonConfig } from "./json-config.js"
 import { buildIngestUrl, buildTelemetryKeyUrl } from "./constants.js"
 import { TOKEN_REGEX, maskToken, validateTokenShape } from "./token.js"
+import { recordKeyVerdict, usageKeyId } from "./notice-state.js"
 
 interface ClaudeSettings {
   env?: Record<string, string>
   [key: string]: unknown
 }
+
+/**
+ * What the export actually carries, said before the question rather than after
+ * the answer. Exported because every path that enables monitoring without asking
+ * (`--track-usage`, Express) still owes the reader this sentence.
+ */
+export const USAGE_PRIVACY_NOTE =
+  "Counts, not content: Claude Code exports token counts, cost, and model and tool names — " +
+  "never your prompts, your code, or your file paths."
 
 /** The settings file the env block lands in for the chosen scope. */
 export function claudeSettingsPath(projectDir: string, opts: { global?: boolean }): string {
@@ -90,6 +105,7 @@ export function writeTelemetryEnv(
 export async function probeTelemetryKey(
   baseUrl: string,
   token: string,
+  opts: { timeoutMs?: number } = {},
 ): Promise<"valid" | "invalid" | "unknown"> {
   try {
     const res = await fetch(`${buildIngestUrl(baseUrl)}/v1/logs`, {
@@ -99,6 +115,9 @@ export async function probeTelemetryKey(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ resourceLogs: [] }),
+      // A deadline only for callers that have one; a timeout lands in "unknown",
+      // which never condemns the key.
+      signal: opts.timeoutMs === undefined ? undefined : AbortSignal.timeout(opts.timeoutMs),
     })
     if (res.ok) return "valid"
     if (res.status === 401 || res.status === 403) return "invalid"
@@ -221,7 +240,7 @@ export async function resolveTelemetryPlan(args: {
   baseUrl: string
   /** Default scope for the env block (the caller's own scope choice). */
   isGlobal: boolean
-  /** Scope stated explicitly on the CLI (-g/--global); set = never prompt for scope. */
+  /** Scope already settled — an explicit -g/--global, or Express; set = never prompt for scope. */
   explicitGlobal?: boolean
   interactive: boolean
   /** Explicit --track-usage / --no-track-usage; undefined = not stated. */
@@ -244,8 +263,11 @@ export async function resolveTelemetryPlan(args: {
   if (args.trackUsage !== undefined) {
     want = args.trackUsage
   } else if (args.interactive) {
+    console.log()
+    console.log("Your Claude Code cost, tokens and session activity, on your own OpenTrace dashboard.")
+    console.log(`  ${USAGE_PRIVACY_NOTE}`)
     want = await confirm({
-      message: "Track Claude Code usage in OpenTrace? (writes OTEL telemetry env into Claude Code settings)",
+      message: "Monitor your Claude Code usage in OpenTrace?",
       default: true,
     })
   } else {
@@ -261,7 +283,7 @@ export async function resolveTelemetryPlan(args: {
     args.explicitGlobal ??
     (args.interactive
       ? await select({
-          message: "Where should usage tracking be configured?",
+          message: "Where should usage monitoring be configured?",
           choices: [
             {
               name: "Just this project",
@@ -283,6 +305,11 @@ export async function resolveTelemetryPlan(args: {
   const existingToken = readTelemetryToken(configPath)
   if (existingToken) {
     const state = await probeTelemetryKey(args.baseUrl, existingToken)
+    // Hand the verdict to the notice banner, which would otherwise have to ask
+    // the ingest endpoint the same question again on the next run.
+    if (state !== "unknown") {
+      recordKeyVerdict(usageKeyId(configPath), existingToken, state === "valid" ? "valid" : "rejected")
+    }
     if (state !== "invalid") {
       if (state === "unknown") {
         console.warn(`Note: could not verify the usage key already in ${configPath} — keeping it.`)
@@ -303,7 +330,7 @@ export async function resolveTelemetryPlan(args: {
   if (!cliToken && args.interactive) {
     const entered = (
       await password({
-        message: "OpenTrace CLI key (otk_…) to set up usage tracking — leave blank to skip:",
+        message: "OpenTrace CLI key (otk_…) to set up usage monitoring — leave blank to skip:",
         mask: "•",
         validate: (value: string) => {
           const trimmed = value.trim()
@@ -312,26 +339,29 @@ export async function resolveTelemetryPlan(args: {
         },
       })
     ).trim()
-    if (!entered) return { note: "Usage tracking skipped — it needs a CLI key to provision the usage key." }
+    if (!entered) return { note: "Usage monitoring skipped — it needs a CLI key to provision the usage key." }
     cliToken = entered
   }
   if (!cliToken) {
     return {
       note:
-        "Usage tracking requested, but there is no CLI key to provision the usage key with — " +
+        "Usage monitoring requested, but there is no CLI key to provision the usage key with — " +
         "re-run with a key (OpenTrace dashboard → API keys).",
     }
   }
 
   const usage = await provisionUsageKey(args.baseUrl, cliToken)
   if (!usage.ok) {
-    return { note: `Usage tracking skipped — ${usage.message}` }
+    return { note: `Usage monitoring skipped — ${usage.message}` }
   }
   console.log(
     usage.created === false
       ? `  ✓ reusing this CLI key's existing usage key (${maskToken(usage.token)}).`
       : `  ✓ provisioned a usage key (${maskToken(usage.token)}) for Claude Code telemetry.`,
   )
+  // A key the server just issued is known-good; recording it spares the banner a
+  // round-trip and stops any verdict about the key it replaces from lingering.
+  recordKeyVerdict(usageKeyId(configPath), usage.token, "valid")
   return {
     plan: { configPath, env: telemetryEnv(args.baseUrl, usage.token), reusedExisting: false, isGlobalScope },
   }

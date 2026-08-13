@@ -6,12 +6,14 @@ import { DEFAULT_BASE_URL, buildMcpUrl, buildIngestUrl } from "../util/constants
 import { isInteractive } from "../util/tty.js"
 import { maskToken, validateTokenShape } from "../util/token.js"
 import { probeMcp } from "../util/mcp-probe.js"
-import { getToken, KeychainUnavailableError } from "../util/keychain.js"
+import { findStoredKey, storedKeySourceLabel } from "../util/stored-key.js"
 import { readPluginToken } from "../util/plugin-token.js"
 import { attachClientKey, attachPluginKey } from "../util/attach-key.js"
-import { resolveTelemetryPlan, writeTelemetryEnv } from "../util/telemetry.js"
+import { resolveTelemetryPlan, writeTelemetryEnv, USAGE_PRIVACY_NOTE } from "../util/telemetry.js"
+import { cliKeyId, recordKeyVerdict } from "../util/notice-state.js"
 import { loginWithBrowser } from "../util/oauth/flow.js"
 import { looksHeadless } from "../util/oauth/browser.js"
+import { claudeCodeSurfaces, hasClaudeCodeDesktop } from "../util/claude-app.js"
 import { findKeyClient, hasKeyClientEntry } from "../key-clients/index.js"
 import type { Integration } from "../integrations/types.js"
 
@@ -23,6 +25,8 @@ interface InstallCommandOptions {
   apiKey?: string
   /** Explicit --track-usage / --no-track-usage; undefined = not stated (prompt or skip). */
   trackUsage?: boolean
+  /** Explicit --express; undefined = ask (interactively) or use the flag-driven path. */
+  express?: boolean
   yes?: boolean
   global?: boolean
   toolOpts?: Record<string, unknown>
@@ -74,6 +78,49 @@ function targetState(
 // Prompts
 // ---------------------------------------------------------------------------
 
+type InstallMode = "express" | "custom"
+
+/**
+ * Asked before anything else, because Express is precisely an answer to every
+ * question that would otherwise follow: all projects, every detected tool,
+ * browser sign-in, usage monitoring on. Naming the detected tools in the
+ * description matters — "every detected tool" is only reassuring once you can
+ * see which ones those are.
+ */
+async function promptMode(detected: Integration[]): Promise<InstallMode> {
+  const detectedList = detected.length > 0 ? detected.map((i) => i.label).join(", ") : "none found yet"
+  return select({
+    message: "How should OpenTrace be set up?",
+    choices: [
+      {
+        name: "Express — recommended",
+        value: "express" as const,
+        description: `Sign in, then set up every detected tool (${detectedList}) for all projects, usage monitoring on`,
+      },
+      {
+        name: "Custom",
+        value: "custom" as const,
+        description: "Pick the scope, the tools, how they authenticate, and whether to monitor usage",
+      },
+    ],
+  })
+}
+
+/**
+ * What the tool list says about a tool's presence. Claude Code is two surfaces
+ * behind one entry — the terminal CLI and the desktop app's Code tab, which
+ * share the same config files — so it names them rather than claiming a bare
+ * "detected" that leaves a desktop-only user unsure they are covered.
+ */
+function detectionTag(integration: Integration): string {
+  if (!integration.detect()) return "not found"
+  if (integration.id === "claude-code") {
+    const surfaces = claudeCodeSurfaces()
+    if (surfaces.length > 0) return `detected: ${surfaces.join(" + ")}`
+  }
+  return "detected"
+}
+
 /**
  * Scope is asked BEFORE the tool list so the "already configured" labels in
  * that list are exact — whether an entry exists depends on which file we'd
@@ -110,7 +157,7 @@ async function promptTargets(dir: string, isGlobal: boolean): Promise<Integratio
     // It is a label, not a decision — the authoritative check runs after the
     // key prompt and prints what will actually be rewritten.
     const { configured } = targetState(integration, dir, isGlobal)
-    const tags = [detected ? "detected" : "not found"]
+    const tags = [detectionTag(integration)]
     if (configured) tags.push("already configured")
     return {
       name: `${integration.label}  (${tags.join(" · ")})`,
@@ -150,26 +197,17 @@ interface KeyCheck {
 /**
  * Confirm a CLI key with a real MCP handshake. Only a 401 tells us the key is
  * bad — a network or provisioning failure says nothing about the key, so those
- * are reported as "unverified" and the key is still used.
+ * are reported as "unverified" and the key is still used. Every definite answer
+ * is handed to the notice banner, which then has no reason to ask again.
  */
 async function checkKey(mcpUrl: string, token: string): Promise<KeyCheck> {
   const probe = await probeMcp(mcpUrl, token)
-  if (probe.ok) return { ok: true, rejected: false }
-  return { ok: false, rejected: probe.kind === "auth", message: probe.message }
-}
-
-/** A key already on this machine from an earlier connect/install, if there is one. */
-function storedKey(mcpUrl: string): ResolvedKey | undefined {
-  try {
-    const fromKeychain = getToken(mcpUrl)
-    if (fromKeychain) return { token: fromKeychain, source: "keychain" }
-  } catch (err) {
-    // A missing Secret Service is not an onboarding failure — the plugin token
-    // file below is checked next, and the prompt still works.
-    if (!(err instanceof KeychainUnavailableError)) throw err
+  if (probe.ok) {
+    recordKeyVerdict(cliKeyId(mcpUrl), token, "valid")
+    return { ok: true, rejected: false }
   }
-  const fromPlugin = readPluginToken()
-  return fromPlugin ? { token: fromPlugin, source: "plugin" } : undefined
+  if (probe.kind === "auth") recordKeyVerdict(cliKeyId(mcpUrl), token, "rejected")
+  return { ok: false, rejected: probe.kind === "auth", message: probe.message }
 }
 
 const MAX_KEY_ATTEMPTS = 3
@@ -182,10 +220,14 @@ const MAX_KEY_ATTEMPTS = 3
  * mount and the usage-key endpoint alike — validated with an MCP handshake.
  * Returning undefined means "no key" — the tools fall back to signing in with
  * OAuth from inside the tool, which is a fully supported outcome, not an error.
+ *
+ * Express skips the "how?" question and signs in with the browser, which is what
+ * the mode promised; the paste prompt is still there as the fallback if the
+ * browser cannot be used.
  */
 async function resolveApiKey(
   mcpUrl: string,
-  opts: { apiKey?: string; interactive: boolean; baseUrl: string },
+  opts: { apiKey?: string; interactive: boolean; baseUrl: string; express?: boolean },
 ): Promise<ResolvedKey | undefined> {
   if (opts.apiKey) {
     const check = await checkKey(mcpUrl, opts.apiKey)
@@ -200,9 +242,9 @@ async function resolveApiKey(
     return { token: opts.apiKey, source: "flag" }
   }
 
-  const existing = storedKey(mcpUrl)
+  const existing = findStoredKey(mcpUrl, { includePluginToken: true })
   if (existing) {
-    const where = existing.source === "keychain" ? "OS keychain" : "Claude Code plugin"
+    const where = storedKeySourceLabel(existing.source)
     // Announced because it costs a network round-trip: without this the command
     // appears to stall before its first output. Worth the wait either way — a
     // revoked key that gets re-attached silently fails on every later call.
@@ -226,28 +268,30 @@ async function resolveApiKey(
 
   // Browser sign-in is the interactive default; pasting stays one keystroke
   // away, and automation (`--api-key`, `connect otk_…`, non-TTY) never lands here.
-  const method = await select({
-    message: "How should these tools authenticate to OpenTrace?",
-    choices: [
-      {
-        name: "Sign in with your browser",
-        value: "browser",
-        description: looksHeadless()
-          ? "Mints a CLI key for this machine (needs a browser on THIS machine — won't work over SSH)"
-          : "Opens the OpenTrace sign-in and mints a CLI key for this machine",
-      },
-      {
-        name: "Paste a CLI key (otk_…)",
-        value: "paste",
-        description: "From the OpenTrace dashboard → API keys",
-      },
-      {
-        name: "Skip — sign in from each tool later",
-        value: "skip",
-        description: "Tools authenticate with OAuth from inside the tool (in Claude Code: /mcp)",
-      },
-    ],
-  })
+  const method = opts.express
+    ? "browser"
+    : await select({
+        message: "How should these tools authenticate to OpenTrace?",
+        choices: [
+          {
+            name: "Sign in with your browser",
+            value: "browser",
+            description: looksHeadless()
+              ? "Mints a CLI key for this machine (needs a browser on THIS machine — won't work over SSH)"
+              : "Opens the OpenTrace sign-in and mints a CLI key for this machine",
+          },
+          {
+            name: "Paste a CLI key (otk_…)",
+            value: "paste",
+            description: "From the OpenTrace dashboard → API keys",
+          },
+          {
+            name: "Skip — sign in from each tool later",
+            value: "skip",
+            description: "Tools authenticate with OAuth from inside the tool (in Claude Code: /mcp)",
+          },
+        ],
+      })
   if (method === "skip") return undefined
 
   if (method === "browser") {
@@ -341,11 +385,60 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   // nothing can block on a prompt that will never be answered.
   const interactive = !opts.yes && isInteractive()
 
-  // 1. Scope. An explicit -g/--global answers this; otherwise ask, falling back
-  //    to project-level (the historical default) when we cannot.
+  // 1. Express or Custom. Per-tool flags are already a custom answer, so they
+  //    skip the question; `--express` states it outright, including for
+  //    automation. Everything Express decides is announced before it acts —
+  //    a mode that asks nothing must not also do anything unannounced.
   const explicitTargets = flaggedTargets(opts)
+  // Detected once and reused: the Express summary names the tools it is about to
+  // set up, and `targets` must be that same list. Two calls could disagree —
+  // and a summary that does not describe the work is worse than none.
+  const detected = detectInstalled()
+  let express = opts.express === true
+  if (opts.express === undefined && interactive && explicitTargets.length === 0) {
+    express = (await promptMode(detected)) === "express"
+  }
+
+  if (express) {
+    if (detected.length === 0) {
+      // Express has nothing to be express about. Falling back to the tool list
+      // beats silently doing nothing, or writing config for tools that are
+      // nowhere on this machine.
+      console.log("No supported AI tools detected — switching to Custom so you can pick which to set up.")
+      console.log()
+      express = false
+    } else {
+      console.log()
+      console.log("Express setup:")
+      console.log(`  • Tools:   ${detected.map((i) => i.label).join(", ")}`)
+      console.log("  • Scope:   all projects (user-level config)")
+      // `--express --no-track-usage` is a coherent request, and the flag wins —
+      // so the summary must not claim monitoring the run then skips.
+      if (detected.some((i) => i.id === "claude-code") && opts.trackUsage !== false) {
+        console.log("  • Usage:   monitoring your Claude Code usage in OpenTrace")
+        console.log(`             ${USAGE_PRIVACY_NOTE}`)
+      }
+      // Only promise the sign-in this run can actually perform: `--express -y`
+      // and `--express` in CI have no browser to open, and the key step falls
+      // back to whatever this machine already holds.
+      if (opts.apiKey) {
+        console.log("  • Sign-in: the CLI key given on the command line")
+      } else if (interactive) {
+        console.log("  • Sign-in: your browser, which mints a CLI key for this machine")
+      } else {
+        console.log("  • Sign-in: any CLI key already on this machine — a non-interactive run cannot open a browser")
+      }
+      console.log()
+    }
+  }
+
+  // 2. Scope. Express is "all projects" by definition; otherwise an explicit
+  //    -g/--global answers it, then the prompt, then project-level (the
+  //    historical default) when we cannot ask.
   let isGlobal: boolean
-  if (opts.global !== undefined) {
+  if (express) {
+    isGlobal = true
+  } else if (opts.global !== undefined) {
     isGlobal = opts.global
   } else if (interactive) {
     isGlobal = await promptScope()
@@ -353,14 +446,19 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     isGlobal = false
   }
 
-  // 2. Which tools. Per-tool flags win; then the prompt; then bare detection.
-  //    How they were chosen decides whether an existing config is confirmed
-  //    before it gets rewritten, so it is tracked rather than re-derived.
+  // 3. Which tools. Per-tool flags win; then Express or bare detection; then the
+  //    prompt. How they were chosen decides whether an existing config is
+  //    confirmed before it gets rewritten, so it is tracked rather than
+  //    re-derived.
   let targets: Integration[]
   let targetSource: "flags" | "prompt" | "detected"
   if (explicitTargets.length > 0) {
     targets = explicitTargets
     targetSource = "flags"
+  } else if (express) {
+    // The same list the Express summary named, so not printed twice.
+    targetSource = "detected"
+    targets = detected
   } else if (interactive) {
     targetSource = "prompt"
     targets = await promptTargets(dir, isGlobal)
@@ -370,7 +468,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     }
   } else {
     targetSource = "detected"
-    targets = detectInstalled()
+    targets = detected
     if (targets.length === 0) {
       console.log("No supported AI tools detected.")
       console.log()
@@ -383,21 +481,25 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     console.log(`Detected: ${targets.map((i) => i.label).join(", ")}`)
   }
 
-  // 3. How they authenticate. Asked once and applied to every selected tool.
+  // 4. How they authenticate. Asked once and applied to every selected tool.
   //    The same CLI key later authenticates the usage-key endpoint.
-  const key = await resolveApiKey(mcpUrl, { apiKey: opts.apiKey, interactive, baseUrl })
+  const key = await resolveApiKey(mcpUrl, { apiKey: opts.apiKey, interactive, baseUrl, express })
 
-  // 4. Usage tracking. Decided and provisioned up front so every prompt and
+  // 5. Usage monitoring. Decided and provisioned up front so every prompt and
   //    network round-trip happens before the first file is written.
   const telemetry = await resolveTelemetryPlan({
     dir,
     baseUrl,
     isGlobal,
     // Only the flag counts as explicit — an interactive scope answer above
-    // becomes the default for telemetry's own scope question, not its answer.
-    explicitGlobal: opts.global,
+    // becomes the default for the scope question, not its answer. Express is
+    // the exception: it settled both the "whether" and the "where".
+    explicitGlobal: express ? true : opts.global,
     interactive,
-    trackUsage: opts.trackUsage,
+    // Express turns monitoring on, but only where the user did not say
+    // otherwise: a `--no-track-usage` they typed is honoured rather than
+    // silently overridden by the mode's default.
+    trackUsage: opts.trackUsage ?? (express ? true : undefined),
     cliToken: key?.token,
     targetsClaudeCode: targets.some((i) => i.id === "claude-code"),
   })
@@ -518,25 +620,36 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     }
   }
 
-  // Apply the usage-tracking plan (its prompts and minting already ran above).
+  // Apply the usage-monitoring plan (its prompts and minting already ran above).
   if (telemetry.note) notes.push(telemetry.note)
   if (telemetry.plan) {
     try {
       const { existed } = writeTelemetryEnv(telemetry.plan.configPath, telemetry.plan.env)
       results.push({
-        label: "Claude Code (usage tracking)",
+        label: "Claude Code (usage monitoring)",
         configPath: telemetry.plan.configPath,
         status: existed ? "updated" : "added",
       })
       if (!telemetry.plan.isGlobalScope) {
         notes.push(
-          "Usage tracking: the usage key lands in .claude/settings.json, which is often committed. " +
-            'It is a write-only ingest credential (it cannot read anything), but pick "All projects" if you don\'t want it in the repo.',
+          "Usage monitoring: the usage key lands in .claude/settings.json, which is often committed. " +
+            'The key only sends — it cannot read anything in OpenTrace — but pick "All projects" if you don\'t want it in the repo.',
         )
       }
     } catch (err) {
-      console.error(`  Claude Code (usage tracking): failed — ${err instanceof Error ? err.message : String(err)}`)
+      console.error(`  Claude Code (usage monitoring): failed — ${err instanceof Error ? err.message : String(err)}`)
     }
+  }
+
+  // Claude Code Desktop needs nothing written for it — the app's Code tab runs
+  // the same engine off the same files as the CLI. What it does need saying is
+  // that a running session will not notice: config is read when a session
+  // starts, so restarting the app is not enough on its own.
+  if (targets.some((i) => i.id === "claude-code") && hasClaudeCodeDesktop()) {
+    notes.push(
+      "Claude Code Desktop (the Claude app's Code tab) reads these same files, so it is covered by the above. " +
+        "Start a NEW desktop session to pick it up — one already running won't.",
+    )
   }
 
   if (results.length === 0) return

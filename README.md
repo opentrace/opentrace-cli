@@ -21,7 +21,7 @@ Requires Node.js 18 or newer.
 otx login
 ```
 
-`otx login` opens your browser, signs you in to OpenTrace, and does the rest: it mints a **CLI key** for this machine, wires up your client (Claude Code by default), and offers to set up usage tracking. Nothing to paste, no dashboard visit. Then restart your tool — in Claude Code, accept the plugin prompt and run `/reload-plugins`.
+`otx login` opens your browser, signs you in to OpenTrace, and does the rest: it mints a **CLI key** for this machine, wires up your client (Claude Code by default), and offers to monitor your Claude Code usage. Nothing to paste, no dashboard visit. Then restart your tool — in Claude Code, accept the plugin prompt and run `/reload-plugins`.
 
 Browser sign-in needs a local browser and a terminal. On a server, in CI, or over SSH, use a key instead:
 
@@ -29,7 +29,7 @@ Browser sign-in needs a local browser and a terminal. On a server, in CI, or ove
 otx connect otk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-The key you paste is your **CLI key**, issued from the OpenTrace dashboard. It wires your client (Claude Code by default) to talk to OpenTrace with **tenant-global** reach — every environment and workspace the key's owner can see. The CLI then asks whether you want to **track Claude Code usage** in OpenTrace; say yes and it uses the same CLI key to provision a **usage key** (`claude_code_telemetry` scope) and writes the OTEL telemetry env block into your Claude Code settings. Restart the client, and the model can discover workspaces and operate on any of them.
+The key you paste is your **CLI key**, issued from the OpenTrace dashboard. It wires your client (Claude Code by default) to talk to OpenTrace with **tenant-global** reach — every environment and workspace the key's owner can see. The CLI then asks whether you want to **monitor your Claude Code usage** in OpenTrace; say yes and it uses the same CLI key to provision a **usage key** (`claude_code_telemetry` scope) and writes the OTEL telemetry env block into your Claude Code settings. Restart the client, and the model can discover workspaces and operate on any of them.
 
 ## Commands
 
@@ -44,7 +44,7 @@ otx login --no-browser           # print the URL instead of launching a browser
 otx login --url https://api.example.opentrace.ai
 ```
 
-It runs an OAuth loopback flow (dynamic client registration + PKCE) against your OpenTrace host, exchanges the sign-in for a `cli`-scoped key, and from there behaves exactly like `otx connect otk_…`: the key is validated with an MCP handshake, attached to the client, and reused for the optional usage-tracking step. The sign-in token itself is discarded — the CLI keeps only the minted key.
+It runs an OAuth loopback flow (dynamic client registration + PKCE) against your OpenTrace host, exchanges the sign-in for a `cli`-scoped key, and from there behaves exactly like `otx connect otk_…`: the key is validated with an MCP handshake, attached to the client, and reused for the optional usage-monitoring step. The sign-in token itself is discarded — the CLI keeps only the minted key.
 
 **Options:** `--client <id>`, `--base-url <url>`, `--url <url>`, `--no-browser`, `--track-usage` / `--no-track-usage`, `-g, --global`, `-y, --yes`.
 
@@ -77,14 +77,14 @@ otx connect otk_… --url https://api.example.opentrace.ai
 |------|-------------|
 | `--url <url>` | OpenTrace host (default: production). Sets the MCP endpoint (normalized to end in `/mcp/v1/`), the usage-key endpoint, **and** the telemetry ingest endpoint together. |
 | `--client <id>` | Target client: `claude-code` (default), `claude-desktop`, or `cursor` |
-| `--track-usage` / `--no-track-usage` | Enable/skip Claude Code usage tracking without asking |
+| `--track-usage` / `--no-track-usage` | Monitor/skip your Claude Code usage without asking |
 
 What it does: validates the key shape locally, then confirms it with an MCP handshake against the endpoint (invalid/expired/revoked keys are rejected before anything is written). Then, per client:
 
 - **Claude Code** → installs the **plugin** (which supersedes a bare MCP entry) and attaches the key to it: seeds the plugin's `mcp_url` and writes the key to `~/.claude/opentrace-plugin.token` (0600), which the plugin's `headersHelper` reads to send `Authorization: Bearer …`. No direct `~/.claude.json` entry.
 - **Cursor / Claude Desktop** → writes the MCP entry with the `Authorization: Bearer` header directly, and stores the key in your OS keychain.
 
-Finally (Claude Code only, interactive or `--track-usage`): asks whether to track Claude Code usage in OpenTrace, and at which level — see [Usage tracking](#usage-tracking-claude-code-telemetry).
+Finally (Claude Code only, interactive or `--track-usage`): asks whether to monitor your Claude Code usage in OpenTrace, and at which level — see [Usage monitoring](#usage-monitoring-claude-code-telemetry).
 
 No key is ever printed. (Undo: `otx disconnect --plugin` for Claude Code, or `otx disconnect --mcp --keychain --client cursor` for the others.)
 
@@ -92,26 +92,36 @@ No key is ever printed. (Undo: `otx disconnect --plugin` for Claude Code, or `ot
 
 When `connect` is given a path (or nothing) instead of a key, it runs editor onboarding — the Claude Code plugin where supported (which supersedes the bare MCP), a plain MCP entry everywhere else. `install` is the same flow.
 
-Interactive by default. It asks four things, each skippable with a flag:
+Interactive by default. The first question is how much you want to be asked:
+
+| Mode | What it does |
+|------|--------------|
+| **Express** (recommended) | Signs you in with your browser, then sets up **every detected tool** for **all projects** with **usage monitoring on**. Nothing else is asked. |
+| **Custom** | The full wizard below. |
+
+Express prints exactly what it is about to do — the tools, the scope, the sign-in, and what the usage export carries — before it does any of it. `--express` states the choice up front (including for automation); per-tool flags are already a custom answer, so they skip the question. If nothing is detected there is nothing to be express about, and it falls back to Custom so you can pick.
+
+Custom asks four things, each skippable with a flag:
 
 1. **Scope** — just this project, or all projects (`-g, --global`)
 2. **Which tools** — detected ones pre-checked; the rest are still listed, so you can configure a tool before installing it (per-tool flags)
 3. **How to authenticate** — a three-way choice: sign in with your browser (the default; mints a CLI key for this machine), paste a CLI key from the dashboard, or skip and sign in from the tool later. Whichever key results is attached to the tools and reused for the usage-key step (`--api-key` preempts the question)
-4. **Usage tracking** — track Claude Code usage in OpenTrace, and at which level (`--track-usage` / `--no-track-usage`); see [Usage tracking](#usage-tracking-claude-code-telemetry)
+4. **Usage monitoring** — monitor your Claude Code usage in OpenTrace, and at which level (`--track-usage` / `--no-track-usage`); see [Usage monitoring](#usage-monitoring-claude-code-telemetry)
 
 A pasted key is shape-checked, then confirmed with an MCP handshake before anything is written; a key this machine already holds (OS keychain, or the plugin token file) is revalidated and reused without asking. Keys are always written **user-scoped**, even when you pick project scope, so a bearer token never lands in a committable file. Tools with no API-key mechanism get the headerless MCP entry and are called out in the summary.
 
 ```bash
-otx connect                    # prompt: scope → tools → key → usage tracking
+otx connect                    # prompt: Express or Custom
+otx install --express          # Express with no questions at all
 otx install --claude-code      # a specific tool (still asks scope + key)
 otx install /path/to/repo -y   # no prompts: detected tools, project scope, stored key
 otx install --global           # user-level instead of project-level
 otx install --api-key otk_…    # attach a key non-interactively
 ```
 
-`-y` and any non-interactive run (CI, piped stdin) skip every prompt and fall back to detected tools, project scope, whatever key is already stored, and no usage tracking unless `--track-usage` says so.
+`-y` and any non-interactive run (CI, piped stdin) skip every prompt and fall back to detected tools, project scope, whatever key is already stored, and no usage monitoring unless `--track-usage` says so. `--express -y` keeps Express's choices (all projects, every detected tool, monitoring on) but cannot open a browser, so it uses whatever key the machine already holds.
 
-**Options:** `--base-url <url>`, `--url <url>`, `--api-key <key>`, `--track-usage` / `--no-track-usage`, `-y, --yes`, `-g, --global`, and per-tool flags (`--claude-code`, `--cursor`, `--windsurf`, `--vscode`, `--continue`, `--zed`, `--jetbrains`).
+**Options:** `--base-url <url>`, `--url <url>`, `--api-key <key>`, `--express`, `--track-usage` / `--no-track-usage`, `-y, --yes`, `-g, --global`, and per-tool flags (`--claude-code`, `--cursor`, `--windsurf`, `--vscode`, `--continue`, `--zed`, `--jetbrains`).
 
 ### `otx add-mcp [path]`
 
@@ -177,7 +187,9 @@ The CLI key goes into a **user-scoped** file in your home directory (never a com
 - **Endpoint** — pass `--url` (or `--base-url`) to target a non-prod host. For Claude Code it's injected as the plugin's `mcp_url` (written to `pluginConfigs` in `~/.claude/settings.json`, since Claude Code reads plugin config from user settings only); for other editors it's written into the MCP entry. Omit it and the plugin falls back to prompting for `mcp_url` (default `https://api.opentrace.ai/mcp/v1/`) on enable.
 - **With a CLI key** — the key goes to the same user-scoped destinations as the `connect otk_…` flow above (plugin token file for Claude Code; bearer-header entry + keychain for Cursor). The endpoint is always seeded as the plugin's `mcp_url` in that case, so the plugin never prompts for one.
 
-## Usage tracking (Claude Code telemetry)
+## Usage monitoring (Claude Code telemetry)
+
+This is **your** usage on **your** dashboard: cost, tokens and session activity, per person and per session. Counts, not content — Claude Code exports token counts, cost, and model and tool names, never your prompts, your code, or your file paths.
 
 Opt-in, asked during `connect`/`install` (or forced with `--track-usage` / suppressed with `--no-track-usage`). It applies to **Claude Code only** — when Claude Code is not among the tools being set up, the question isn't asked and an explicit `--track-usage` is refused with a note rather than writing Claude Code settings on a run that isn't about Claude Code. When enabled, the CLI calls the usage-key endpoint with your CLI key to **provision a usage key** (`claude_code_telemetry` scope; the server names it for its owner and mint time — e.g. `Alice's Usage Key (Aug 11, 10:00AM)` — and flags it auto-created in your key list) and appends the OTLP exporter env block to the Claude Code settings file at the level you pick — `.claude/settings.json` in the project, or `~/.claude/settings.json` for all projects. An explicit `-g`/`--global` answers the level outright (so `--track-usage -g` runs with no telemetry prompts); otherwise it's asked interactively:
 
@@ -199,6 +211,33 @@ Existing `env` entries are preserved. The ingest endpoint follows the same host 
 
 The usage key can only *write* telemetry (it is refused by the MCP and REST surfaces), so a leak from a committed `.claude/settings.json` cannot read your graph — but pick "All projects" if you'd rather keep it out of the repo entirely.
 
+The env block is read by **both** Claude Code surfaces — the terminal CLI and the desktop app's Code tab — since both read `settings.json`.
+
+## Claude Code: CLI and Desktop
+
+The Claude desktop app's **Code** tab is Claude Code Desktop: the same engine as the terminal CLI, reading [the same configuration files](https://code.claude.com/docs/en/desktop#shared-configuration). So everything otx writes for Claude Code covers both surfaces, and there is nothing extra to install — `.mcp.json`, `~/.claude.json`, the plugin declaration (`extraKnownMarketplaces` / `enabledPlugins`), `pluginConfigs`, and the `env` block for usage monitoring all apply to desktop sessions.
+
+otx detects the app, so a machine that has only the desktop app is set up rather than reported as "not found"; the tool list says which surfaces it found (`detected: CLI + Desktop`).
+
+Two things behave differently enough to be worth knowing:
+
+- **A running session won't pick up a change.** Config is read when a session starts, so restarting the app is not enough — start a **new** session. otx says so in the summary when it sees the desktop app.
+- **`claude_desktop_config.json` wins in the Code tab.** The desktop app also loads MCP servers from the chat surface's `claude_desktop_config.json` into local Code-tab sessions, and on a name collision that definition takes precedence over `~/.claude.json` / `.mcp.json`. Since `otx connect --client claude-desktop` writes the `mcp-remote` stdio bridge there (Desktop chat accepts nothing else), setting up **both** clients leaves Code-tab sessions using the npx bridge instead of the native HTTP mount. otx warns when this applies; remove the `opentrace` entry from `claude_desktop_config.json` if you'd rather Code sessions used the direct endpoint.
+
+Not covered: **Cowork** and **cloud** sessions source their skills, plugins and connectors from your claude.ai account rather than `~/.claude`, so a local otx run does not reach them.
+
+## Notices
+
+otx prints a banner above its own output when there is something you could not otherwise find out at that moment:
+
+- **An update is available** — the latest published version, checked against the npm registry at most once a day. Shown on every command.
+- **Your CLI key is no longer accepted** — expired or revoked; points you at `otx login`. Only on commands that don't check the key themselves: `install`, `connect` and `login` resolve it inline a moment later and tell you there, where they can offer to sign you in on the spot.
+- **Your usage key was rejected** — worth surfacing because nothing else does: Claude Code has no way to tell you its exports are being turned away, so usage simply stops arriving.
+
+The answers are cached in `~/.opentrace/state.json`, and the commands that already validate a key record their verdict there, so the banner is usually reading work that already happened rather than making a call of its own. Every check has a short deadline, an indefinite answer produces no notice at all (an unreachable host never gets reported as a bad key), and a verdict is tied to the key it was about — replace a rejected key and the warning goes with it.
+
+It writes to stderr, and stays silent when there is no interactive terminal, in CI, or with `OTX_NO_NOTICES=1` (`NO_UPDATE_NOTIFIER=1` is honoured too).
+
 ## Authentication
 
 There are three ways to authenticate, in order of preference:
@@ -210,7 +249,7 @@ There are three ways to authenticate, in order of preference:
 All OpenTrace keys look the same (`otk_` + 43 chars); the **scope** chosen when a key is created decides which surface accepts it:
 
 - **CLI key** — minted by `otx login`, or issued from the OpenTrace dashboard. It authenticates the MCP mount (bearer header on every request, tenant-global reach — this is what lands in your client config / plugin token file) and the usage-key endpoint. Validated via an MCP handshake.
-- **Usage key** (`claude_code_telemetry` scope) — provisioned by the CLI (with your CLI key) when you enable usage tracking; accepted only by the telemetry ingest endpoint, so a leak cannot read anything.
+- **Usage key** (`claude_code_telemetry` scope) — provisioned by the CLI (with your CLI key) when you enable usage monitoring; accepted only by the telemetry ingest endpoint, so a leak cannot read anything.
 Note the two different OAuth flows, which are easy to confuse:
 
 - **`otx login`** signs *the CLI* in and ends with a CLI key stored on your machine. The tool then authenticates by header, and never sees a sign-in prompt.
