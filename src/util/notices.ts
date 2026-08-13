@@ -79,8 +79,8 @@ function tildify(filePath: string): string {
 // ---------------------------------------------------------------------------
 
 async function fetchLatestVersion(): Promise<string | undefined> {
-  // Only the slash needs escaping for the registry's scoped-package path.
-  const url = `https://registry.npmjs.org/${packageName().replace("/", "%2F")}/latest`
+  // A scoped name is one path segment to the registry, so it is encoded as one.
+  const url = `https://registry.npmjs.org/${encodeURIComponent(packageName())}/latest`
   try {
     const res = await fetch(url, {
       headers: { Accept: "application/json" },
@@ -95,6 +95,12 @@ async function fetchLatestVersion(): Promise<string | undefined> {
 }
 
 async function updateNotice(): Promise<Notice | undefined> {
+  // "0.0.0" is packageVersion()'s sentinel for an unreadable manifest, not a
+  // release. Every published version looks newer than it, so comparing would
+  // announce an update on every single command while knowing nothing.
+  const current = packageVersion()
+  if (current === "0.0.0") return undefined
+
   const state = readNoticeState()
   let latest = state.latestVersion
   const checkedAt = state.updateCheckedAt ?? 0
@@ -109,7 +115,6 @@ async function updateNotice(): Promise<Notice | undefined> {
     latest = fetched ?? latest
   }
 
-  const current = packageVersion()
   if (!latest || !isNewerVersion(current, latest)) return undefined
   return {
     lines: [`Update available  ${current} → ${latest}`, `Run  npm install -g ${packageName()}@latest`],
@@ -164,14 +169,18 @@ async function cliKeyNotice(baseUrl: string): Promise<Notice | undefined> {
 }
 
 /**
- * The usage key, checked in the settings file it would actually be read from:
- * user-level first, then this project's. Stops at the first file carrying one,
- * so this costs at most a single request.
+ * The usage key, checked in the file whose copy is actually in force. Project
+ * settings override user settings key-for-key, and the exporter's credential is
+ * one key — so where this project defines a usage key, that is the one Claude
+ * Code sends and the only one whose rejection stops anything arriving. Hence
+ * project first, and stopping at the first file that carries one: a key the
+ * project's copy shadows is not in use, and skipping it keeps this to a single
+ * request.
  */
 async function usageKeyNotice(baseUrl: string): Promise<Notice | undefined> {
   const candidates = [
-    claudeSettingsPath(process.cwd(), { global: true }),
     claudeSettingsPath(process.cwd(), { global: false }),
+    claudeSettingsPath(process.cwd(), { global: true }),
   ]
   for (const configPath of candidates) {
     const token = readTelemetryToken(configPath)
@@ -230,7 +239,9 @@ export async function printNotices(args: { command: string; endpoint?: string })
     if (!SKIPS_CLI_KEY_NOTICE.has(args.command)) pending.push(cliKeyNotice(baseUrl))
     if (!SKIPS_USAGE_KEY_NOTICE.has(args.command)) pending.push(usageKeyNotice(baseUrl))
     const results = await Promise.all(pending)
-    const notices = results.filter((n): n is Notice => n !== undefined)
+    // Empty-lined notices are dropped here so render() always has a line to
+    // measure — a zero-width box would throw rather than print.
+    const notices = results.filter((n): n is Notice => n !== undefined && n.lines.length > 0)
     if (notices.length === 0) return
     process.stderr.write(`\n${render(notices)}\n`)
   } catch {

@@ -390,13 +390,16 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   //    automation. Everything Express decides is announced before it acts —
   //    a mode that asks nothing must not also do anything unannounced.
   const explicitTargets = flaggedTargets(opts)
+  // Detected once and reused: the Express summary names the tools it is about to
+  // set up, and `targets` must be that same list. Two calls could disagree —
+  // and a summary that does not describe the work is worse than none.
+  const detected = detectInstalled()
   let express = opts.express === true
   if (opts.express === undefined && interactive && explicitTargets.length === 0) {
-    express = (await promptMode(detectInstalled())) === "express"
+    express = (await promptMode(detected)) === "express"
   }
 
   if (express) {
-    const detected = detectInstalled()
     if (detected.length === 0) {
       // Express has nothing to be express about. Falling back to the tool list
       // beats silently doing nothing, or writing config for tools that are
@@ -409,7 +412,9 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
       console.log("Express setup:")
       console.log(`  • Tools:   ${detected.map((i) => i.label).join(", ")}`)
       console.log("  • Scope:   all projects (user-level config)")
-      if (detected.some((i) => i.id === "claude-code")) {
+      // `--express --no-track-usage` is a coherent request, and the flag wins —
+      // so the summary must not claim monitoring the run then skips.
+      if (detected.some((i) => i.id === "claude-code") && opts.trackUsage !== false) {
         console.log("  • Usage:   monitoring your Claude Code usage in OpenTrace")
         console.log(`             ${USAGE_PRIVACY_NOTE}`)
       }
@@ -451,9 +456,9 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     targets = explicitTargets
     targetSource = "flags"
   } else if (express) {
-    // Already listed in the Express summary above, so not printed twice.
+    // The same list the Express summary named, so not printed twice.
     targetSource = "detected"
-    targets = detectInstalled()
+    targets = detected
   } else if (interactive) {
     targetSource = "prompt"
     targets = await promptTargets(dir, isGlobal)
@@ -463,7 +468,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     }
   } else {
     targetSource = "detected"
-    targets = detectInstalled()
+    targets = detected
     if (targets.length === 0) {
       console.log("No supported AI tools detected.")
       console.log()
@@ -491,7 +496,10 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     // the exception: it settled both the "whether" and the "where".
     explicitGlobal: express ? true : opts.global,
     interactive,
-    trackUsage: express ? true : opts.trackUsage,
+    // Express turns monitoring on, but only where the user did not say
+    // otherwise: a `--no-track-usage` they typed is honoured rather than
+    // silently overridden by the mode's default.
+    trackUsage: opts.trackUsage ?? (express ? true : undefined),
     cliToken: key?.token,
     targetsClaudeCode: targets.some((i) => i.id === "claude-code"),
   })
