@@ -3,10 +3,13 @@ import os from "node:os"
 import path from "node:path"
 import { readJsonConfig, writeJsonConfig, removeJsonEntry } from "../util/json-config.js"
 import { SERVER_KEY } from "../util/constants.js"
+import { isClaudeAppInstalled } from "../util/claude-app.js"
 import type { KeyClient, KeyClientResult, KeyClientRemoveResult } from "./types.js"
 
 // Claude Code stores user-scoped MCP servers in ~/.claude.json under a top-level
 // "mcpServers" key. Native HTTP transport with custom headers is supported.
+// Local sessions in the desktop app's Code tab read this same file, so one write
+// serves both surfaces.
 
 interface HttpServer {
   type: "http"
@@ -27,7 +30,11 @@ const claudeCode: KeyClient = {
   label: "Claude Code",
 
   detect() {
-    return fs.existsSync(path.join(os.homedir(), ".claude")) || fs.existsSync(configFile())
+    return (
+      fs.existsSync(path.join(os.homedir(), ".claude")) ||
+      fs.existsSync(configFile()) ||
+      isClaudeAppInstalled()
+    )
   },
 
   configPath() {

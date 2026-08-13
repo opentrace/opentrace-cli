@@ -5,6 +5,8 @@ import { probeMcp } from "../util/mcp-probe.js"
 import { isInteractive } from "../util/tty.js"
 import { attachClientKey, attachPluginKey } from "../util/attach-key.js"
 import { resolveTelemetryPlan, writeTelemetryEnv } from "../util/telemetry.js"
+import { cliKeyId, recordKeyVerdict } from "../util/notice-state.js"
+import { hasClaudeCodeDesktop } from "../util/claude-app.js"
 import { findKeyClient, detectKeyClients, KEY_CLIENTS, DEFAULT_KEY_CLIENT } from "../key-clients/index.js"
 import claudeCode from "../integrations/claude-code.js"
 
@@ -23,7 +25,7 @@ const DISCOVERY_TOOLS = ["workspaces_list", "environments_list"]
  * `otx connect otk_<token>` — authenticate a client to the tenant-global
  * OpenTrace MCP endpoint with a CLI key. Validates the key by an MCP handshake,
  * then writes the client's MCP config with the bearer header. The same key
- * authenticates the usage-key endpoint for the optional usage-tracking step.
+ * authenticates the usage-key endpoint for the optional usage-monitoring step.
  * Never echoes the token.
  */
 export async function connectWithKey(token: string, opts: ConnectKeyOptions): Promise<void> {
@@ -51,6 +53,11 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
   // 4. Validate the key with a real MCP handshake (the CLI key's home surface).
   console.log(`Validating key against ${mcpUrl} …`)
   const probe = await probeMcp(mcpUrl, token)
+  // Definite answers only, and recorded either way — the notice banner reads
+  // these instead of re-probing on the next run.
+  if (probe.ok || probe.kind === "auth") {
+    recordKeyVerdict(cliKeyId(mcpUrl), token, probe.ok ? "valid" : "rejected")
+  }
   if (!probe.ok) {
     switch (probe.kind) {
       case "auth":
@@ -97,14 +104,14 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     try {
       const { existed } = writeTelemetryEnv(telemetry.plan.configPath, telemetry.plan.env)
       console.log()
-      console.log(`✓ Usage tracking ${existed ? "updated" : "enabled"} for Claude Code`)
+      console.log(`✓ Usage monitoring ${existed ? "updated" : "enabled"} for Claude Code`)
       console.log(`  Settings:  ${telemetry.plan.configPath}`)
       console.log(`  Ingest:    ${buildIngestUrl(baseUrl)}`)
       if (!telemetry.plan.isGlobalScope) {
-        console.log('  Note: .claude/settings.json is often committed — the usage key is write-only (ingest only), but pick "All projects" if you don\'t want it in the repo.')
+        console.log('  Note: .claude/settings.json is often committed — the key only sends (it cannot read anything), but pick "All projects" if you don\'t want it in the repo.')
       }
     } catch (err) {
-      console.error(`\nFailed to write usage tracking config: ${err instanceof Error ? err.message : String(err)}`)
+      console.error(`\nFailed to write usage monitoring config: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -138,6 +145,11 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
 
     console.log()
     console.log("Restart Claude Code (or /reload-plugins) to activate — the plugin authenticates with your CLI key.")
+    // The desktop app's Code tab reads the very files just written, so it is
+    // already covered; what it does not do is notice mid-session.
+    if (hasClaudeCodeDesktop()) {
+      console.log("Claude Code Desktop (the Claude app's Code tab) is covered too — start a NEW desktop session to pick it up.")
+    }
     console.log("Heads up: keys can expire or be revoked — if calls start returning 401, reconnect with a fresh key.")
     return
   }

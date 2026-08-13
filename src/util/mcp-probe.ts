@@ -62,7 +62,7 @@ async function readJsonRpc(res: Response): Promise<JsonRpcResponse | null> {
   }
 }
 
-async function post(url: string, token: string, body: unknown): Promise<Response> {
+async function post(url: string, token: string, body: unknown, timeoutMs?: number): Promise<Response> {
   return fetch(url, {
     method: "POST",
     headers: {
@@ -72,6 +72,10 @@ async function post(url: string, token: string, body: unknown): Promise<Response
       "MCP-Protocol-Version": PROTOCOL_VERSION,
     },
     body: JSON.stringify(body),
+    // Only set where the caller has a deadline. Onboarding deliberately has
+    // none: the user is waiting for this answer and a slow server beats a
+    // spurious "could not reach". The notice banner is the opposite case.
+    signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
   })
 }
 
@@ -101,21 +105,33 @@ function mapHttpFailure(status: number, body: string): ProbeResult {
 /**
  * Probe the MCP endpoint at `mcpUrl` (already normalized to end in /mcp/v1/)
  * with `token`. Runs initialize, then tools/list, mapping failures per the
- * OpenTrace auth contract.
+ * OpenTrace auth contract. `timeoutMs` bounds each request for callers that
+ * cannot afford to wait (a timeout surfaces as `network`, never as `auth` — a
+ * deadline says nothing about the key).
  */
-export async function probeMcp(mcpUrl: string, token: string): Promise<ProbeResult> {
+export async function probeMcp(
+  mcpUrl: string,
+  token: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<ProbeResult> {
+  const { timeoutMs } = opts
   let initRes: Response
   try {
-    initRes = await post(mcpUrl, token, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: PROTOCOL_VERSION,
-        capabilities: {},
-        clientInfo: { name: "opentrace-cli", version: packageVersion() },
+    initRes = await post(
+      mcpUrl,
+      token,
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: PROTOCOL_VERSION,
+          capabilities: {},
+          clientInfo: { name: "opentrace-cli", version: packageVersion() },
+        },
       },
-    })
+      timeoutMs,
+    )
   } catch (err) {
     return {
       ok: false,
@@ -133,14 +149,14 @@ export async function probeMcp(mcpUrl: string, token: string): Promise<ProbeResu
 
   // Best-effort initialized notification (stateless servers accept or ignore it).
   try {
-    await post(mcpUrl, token, { jsonrpc: "2.0", method: "notifications/initialized" })
+    await post(mcpUrl, token, { jsonrpc: "2.0", method: "notifications/initialized" }, timeoutMs)
   } catch {
     /* non-fatal */
   }
 
   let listRes: Response
   try {
-    listRes = await post(mcpUrl, token, { jsonrpc: "2.0", id: 2, method: "tools/list" })
+    listRes = await post(mcpUrl, token, { jsonrpc: "2.0", id: 2, method: "tools/list" }, timeoutMs)
   } catch (err) {
     return {
       ok: false,

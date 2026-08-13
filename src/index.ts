@@ -9,6 +9,7 @@ import { ALL_INTEGRATIONS } from "./util/detect.js"
 import { DEFAULT_BASE_URL, toBaseUrl, buildMcpUrl } from "./util/constants.js"
 import { looksLikeToken } from "./util/token.js"
 import { packageVersion } from "./util/version.js"
+import { printNotices } from "./util/notices.js"
 
 // Read at runtime so `--version` never drifts from the published package.
 const version = packageVersion()
@@ -19,6 +20,19 @@ program
   .name("opentrace")
   .description("CLI for setting up and managing OpenTrace integrations")
   .version(version)
+
+// Anything the user should know before the command they asked for speaks: a
+// newer release, or a key that has stopped being accepted. A preAction hook is
+// the right seam — it runs ahead of the action handler's own output, and never
+// for `--help` or `--version`, which run no action at all. Bounded, cached, and
+// silent outside an interactive terminal; see util/notices.ts.
+program.hook("preAction", async (_program, actionCommand) => {
+  const opts = actionCommand.opts() as { url?: string; baseUrl?: string }
+  await printNotices({
+    command: actionCommand.name(),
+    endpoint: opts.url ?? opts.baseUrl,
+  })
+})
 
 program
   .command("add-mcp [path]")
@@ -35,8 +49,9 @@ function addInstallOptions(cmd: Command): Command {
     .option("--base-url <url>", "OpenTrace API base URL", DEFAULT_BASE_URL)
     .option("--url <url>", "OpenTrace MCP endpoint (overrides --base-url; fed to the plugin's mcp_url)")
     .option("--api-key <key>", "CLI key (otk_…) to attach; skips the interactive key prompt")
-    .option("--track-usage", "Enable Claude Code usage tracking (OTEL telemetry env) without asking; requires Claude Code among the targets. With -g the level is settled too (no prompts)")
-    .option("--no-track-usage", "Skip Claude Code usage tracking without asking")
+    .option("--express", "Express setup, no questions: every detected tool, all projects, browser sign-in, usage monitoring on")
+    .option("--track-usage", "Monitor your Claude Code usage in OpenTrace without asking; requires Claude Code among the targets. With -g the level is settled too (no prompts)")
+    .option("--no-track-usage", "Skip Claude Code usage monitoring without asking")
     .option("-y, --yes", "Skip prompts: use detected tools, project scope, and any key already stored")
     .option("-g, --global", "Install to user-level config instead of project-level")
   ALL_INTEGRATIONS.forEach((i) => {
@@ -77,6 +92,7 @@ installCmd.action(async (targetPath: string | undefined, opts) => {
     baseUrl,
     pluginUrl,
     apiKey: opts.apiKey,
+    express: opts.express,
     trackUsage: explicitTrackUsage(installCmd),
     yes: opts.yes,
     global: opts.global,
@@ -115,6 +131,7 @@ connectCmd
       baseUrl,
       pluginUrl,
       apiKey: opts.apiKey,
+      express: opts.express,
       trackUsage: explicitTrackUsage(connectCmd),
       yes: opts.yes,
       global: opts.global,
@@ -123,7 +140,7 @@ connectCmd
   })
 
 // The browser front end to `connect otk_…`: OAuth sign-in mints the CLI key,
-// then the same probe/attach/usage-tracking machinery takes over. Automation
+// then the same probe/attach/usage-monitoring machinery takes over. Automation
 // keeps using `connect otk_…` / `install --api-key` — login refuses non-TTY runs.
 const loginCmd = program
   .command("login")
@@ -132,9 +149,9 @@ const loginCmd = program
   .option("--url <url>", "OpenTrace MCP endpoint or host (overrides --base-url)")
   .option("--client <id>", "Target client for the minted key: claude-code | claude-desktop | cursor")
   .option("--no-browser", "Don't launch a browser — print the sign-in URL to open manually")
-  .option("--track-usage", "Enable Claude Code usage tracking without asking")
-  .option("--no-track-usage", "Skip Claude Code usage tracking without asking")
-  .option("-g, --global", "User-level scope for the usage-tracking settings file")
+  .option("--track-usage", "Monitor your Claude Code usage in OpenTrace without asking")
+  .option("--no-track-usage", "Skip Claude Code usage monitoring without asking")
+  .option("-g, --global", "User-level scope for the usage-monitoring settings file")
   .option("-y, --yes", "Skip confirmation prompts (a TTY and browser are still required)")
 loginCmd.action(async (opts) => {
   await login({

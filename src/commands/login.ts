@@ -1,8 +1,8 @@
 import { confirm } from "@inquirer/prompts"
 import { DEFAULT_BASE_URL, normalizeMcpUrl, toBaseUrl } from "../util/constants.js"
-import { getToken, KeychainUnavailableError } from "../util/keychain.js"
-import { readPluginToken } from "../util/plugin-token.js"
+import { findStoredKey } from "../util/stored-key.js"
 import { probeMcp } from "../util/mcp-probe.js"
+import { cliKeyId, recordKeyVerdict } from "../util/notice-state.js"
 import { isInteractive } from "../util/tty.js"
 import { maskToken } from "../util/token.js"
 import { loginWithBrowser } from "../util/oauth/flow.js"
@@ -21,26 +21,9 @@ interface LoginOptions {
 }
 
 /**
- * A key this machine already holds for this endpoint. The keychain is
- * endpoint-scoped (keyed by MCP URL); the plugin token file is NOT, so it is
- * only consulted for the default endpoint — a run pointed at some other
- * deployment must not probe (or offer to keep) a key minted elsewhere.
- */
-function storedCliKey(mcpUrl: string, defaultEndpoint: boolean): string | undefined {
-  try {
-    const fromKeychain = getToken(mcpUrl)
-    if (fromKeychain) return fromKeychain
-  } catch (err) {
-    // No Secret Service is no reason not to sign in — check the plugin file.
-    if (!(err instanceof KeychainUnavailableError)) throw err
-  }
-  return defaultEndpoint ? readPluginToken() : undefined
-}
-
-/**
  * `otx login` — sign in with the browser, trade the sign-in for a cli-scoped
  * otk_ key, then hand that key to the same machinery as `otx connect otk_…`
- * (probe, attach, usage-tracking opt-in). Interactive by design — automation
+ * (probe, attach, usage-monitoring opt-in). Interactive by design — automation
  * passes a key instead, and that path is untouched.
  */
 export async function login(opts: LoginOptions): Promise<void> {
@@ -57,10 +40,16 @@ export async function login(opts: LoginOptions): Promise<void> {
   // Every sign-in mints a fresh server-side key, so a machine that already
   // holds a working one is asked before another is minted.
   if (!opts.yes) {
-    const stored = storedCliKey(mcpUrl, baseUrl === DEFAULT_BASE_URL)
+    // The plugin token file is not endpoint-scoped, so it only describes this
+    // endpoint when this endpoint is the default one — a run pointed at another
+    // deployment must not probe (or offer to keep) a key minted elsewhere.
+    const stored = findStoredKey(mcpUrl, { includePluginToken: baseUrl === DEFAULT_BASE_URL })?.token
     if (stored) {
       console.log(`Checking the CLI key already on this machine (${maskToken(stored)}) …`)
       const probe = await probeMcp(mcpUrl, stored)
+      if (probe.ok || probe.kind === "auth") {
+        recordKeyVerdict(cliKeyId(mcpUrl), stored, probe.ok ? "valid" : "rejected")
+      }
       if (probe.ok) {
         const again = await confirm({
           message: `This machine already has a valid CLI key for ${baseUrl}. Sign in and mint a new one anyway?`,
