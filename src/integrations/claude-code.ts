@@ -3,6 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { readJsonConfig, writeJsonConfig, removeJsonEntry } from "../util/json-config.js"
 import { clearPluginToken } from "../util/plugin-token.js"
+import { isClaudeAppInstalled } from "../util/claude-app.js"
 import {
   SERVER_KEY,
   buildMcpUrl,
@@ -181,8 +182,12 @@ const claudeCode: Integration = {
   label: "Claude Code",
   helpText: ".mcp.json  (--global: ~/.claude/mcp.json)",
 
+  // Covers both surfaces: the terminal CLI and the desktop app's Code tab, which
+  // runs the same engine off the same config files. A machine with only the app
+  // installed still has Claude Code to configure — reporting "not found" there
+  // was the whole of what otx got wrong about the desktop app.
   detect() {
-    return fs.existsSync(path.join(os.homedir(), ".claude"))
+    return fs.existsSync(path.join(os.homedir(), ".claude")) || isClaudeAppInstalled()
   },
 
   getConfigPath(projectDir, { global: isGlobal }) {
