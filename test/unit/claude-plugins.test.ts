@@ -169,6 +169,40 @@ describe("removeInstalledPlugin", () => {
     assert.deepEqual(r.removedPaths, [])
   })
 
+  it("will not delete the plugins directory itself", async () => {
+    // The worst case the guard exists for: a record pointing at the root would
+    // take every other plugin on the machine with it. Only strict children.
+    const { theirs } = seedRealistic()
+    write("installed_plugins.json", {
+      version: 2,
+      plugins: { "opentrace@opentrace": [{ scope: "user", installPath: plugins() }] },
+    })
+    const m = await load()
+    const r = m.removeInstalledPlugin("opentrace@opentrace", "opentrace", "opentrace")
+    assert.equal(r.uninstalled, true, "the record still goes")
+    assert.ok(fs.existsSync(plugins()), "the plugins directory survives")
+    assert.ok(fs.existsSync(path.join(theirs, "marker")), "and so does everyone else's plugin")
+    assert.equal(r.removedPaths.includes(plugins()), false, "the root was never a delete target")
+  })
+
+  it("deletes nothing when the record cannot be rewritten", async () => {
+    // Ordering matters: with the write first, a failure leaves the machine exactly
+    // as it was rather than with a record pointing at directories that are gone.
+    const { ours } = seedRealistic()
+    const file = path.join(plugins(), "installed_plugins.json")
+    fs.chmodSync(file, 0o444)
+    try {
+      const m = await load()
+      const r = m.removeInstalledPlugin("opentrace@opentrace", "opentrace", "opentrace")
+      assert.equal(r.uninstalled, false)
+      assert.ok(r.skipped.includes(m.installedPluginsPath()), "reported, not thrown")
+      assert.ok(fs.existsSync(path.join(ours, "marker")), "install directory untouched")
+      assert.ok(read("installed_plugins.json").plugins["opentrace@opentrace"], "record untouched")
+    } finally {
+      fs.chmodSync(file, 0o644)
+    }
+  })
+
   it("removes the data directory only while it is an empty scaffold", async () => {
     const dataDir = path.join(plugins(), "data", "opentrace-opentrace")
     fs.mkdirSync(dataDir, { recursive: true })

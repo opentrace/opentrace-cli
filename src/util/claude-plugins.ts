@@ -80,8 +80,18 @@ function readJson<T>(file: string): T | undefined {
   }
 }
 
-function writeJson(file: string, value: unknown): void {
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, "utf8")
+/**
+ * Returns false rather than throwing, so a record that cannot be rewritten is
+ * reported like any other skipped file instead of aborting a disconnect halfway
+ * through its other components.
+ */
+function tryWriteJson(file: string, value: unknown): boolean {
+  try {
+    fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, "utf8")
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -94,7 +104,9 @@ function removeRecordedDir(target: string | undefined, removed: string[]): void 
   if (!target) return
   const root = path.resolve(claudePluginsDir())
   const resolved = path.resolve(target)
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) return
+  // Strict children only. The root itself is never a legitimate target: a record
+  // pointing there would take every other plugin on the machine with it.
+  if (!resolved.startsWith(root + path.sep)) return
   if (!fs.existsSync(resolved)) return
   try {
     fs.rmSync(resolved, { recursive: true, force: true })
@@ -155,12 +167,17 @@ export function removeInstalledPlugin(
       // the user has installed, which is a far worse outcome than a leftover.
       result.skipped.push(installedFile)
     } else if (pluginId in installed.plugins) {
-      for (const entry of installed.plugins[pluginId] ?? []) {
-        removeRecordedDir(entry.installPath, result.removedPaths)
-      }
+      // Record first, directories second. The other order leaves the record
+      // pointing at directories that no longer exist if the write fails — and the
+      // record is the half that matters, being what `/plugin` reads.
+      const dirs = (installed.plugins[pluginId] ?? []).map((entry) => entry.installPath)
       delete installed.plugins[pluginId]
-      writeJson(installedFile, installed)
-      result.uninstalled = true
+      if (tryWriteJson(installedFile, installed)) {
+        result.uninstalled = true
+        for (const dir of dirs) removeRecordedDir(dir, result.removedPaths)
+      } else {
+        result.skipped.push(installedFile)
+      }
     }
   }
 
@@ -171,10 +188,14 @@ export function removeInstalledPlugin(
     if (!known || typeof known !== "object") {
       result.skipped.push(marketplacesFile)
     } else if (marketplaceName in known) {
-      removeRecordedDir(known[marketplaceName]?.installLocation, result.removedPaths)
+      const location = known[marketplaceName]?.installLocation
       delete known[marketplaceName]
-      writeJson(marketplacesFile, known)
-      result.marketplaceForgotten = true
+      if (tryWriteJson(marketplacesFile, known)) {
+        result.marketplaceForgotten = true
+        removeRecordedDir(location, result.removedPaths)
+      } else {
+        result.skipped.push(marketplacesFile)
+      }
     }
   }
 
