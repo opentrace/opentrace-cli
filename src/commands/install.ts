@@ -27,6 +27,13 @@ interface InstallCommandOptions {
   trackUsage?: boolean
   /** Explicit --express; undefined = ask (interactively) or use the flag-driven path. */
   express?: boolean
+  /**
+   * Which way the scope question leans when it has not been answered outright.
+   * `install` onboards a project, so it defaults project-side; `login` onboards a
+   * machine, so it comes in here asking for the other default. Only moves the
+   * default — an explicit -g/--global still settles it without asking.
+   */
+  preferGlobal?: boolean
   yes?: boolean
   global?: boolean
   toolOpts?: Record<string, unknown>
@@ -126,7 +133,7 @@ function detectionTag(integration: Integration): string {
  * that list are exact — whether an entry exists depends on which file we'd
  * write, and a label that contradicts what we do next is worse than no label.
  */
-async function promptScope(): Promise<boolean> {
+async function promptScope(defaultGlobal: boolean): Promise<boolean> {
   return select({
     message: "Where should OpenTrace be configured?",
     choices: [
@@ -141,7 +148,7 @@ async function promptScope(): Promise<boolean> {
         description: "Writes user-level config (~/.claude, ~/.cursor, …)",
       },
     ],
-    default: false,
+    default: defaultGlobal,
   })
 }
 
@@ -441,9 +448,9 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   } else if (opts.global !== undefined) {
     isGlobal = opts.global
   } else if (interactive) {
-    isGlobal = await promptScope()
+    isGlobal = await promptScope(opts.preferGlobal ?? false)
   } else {
-    isGlobal = false
+    isGlobal = opts.preferGlobal ?? false
   }
 
   // 3. Which tools. Per-tool flags win; then Express or bare detection; then the

@@ -139,12 +139,15 @@ connectCmd
     })
   })
 
-// The browser front end to `connect otk_…`: OAuth sign-in mints the CLI key,
-// then the same probe/attach/usage-monitoring machinery takes over. Automation
-// keeps using `connect otk_…` / `install --api-key` — login refuses non-TTY runs.
+// The browser front end to onboarding: OAuth sign-in mints the CLI key, then the
+// `install` flow takes over with it — so the dashboard's recommended one-liner
+// gets Express/Custom, tool detection and scope, not just one client. `--client`
+// narrows it to the single-client key flow instead (the only route to Claude
+// Desktop). Automation keeps using `connect otk_…` / `install --api-key` — login
+// refuses non-TTY runs.
 const loginCmd = program
   .command("login")
-  .description("Sign in to OpenTrace in your browser and connect this machine (mints a CLI key)")
+  .description("Sign in to OpenTrace in your browser, then set up your tools (mints a CLI key)")
   .option("--base-url <url>", "OpenTrace API base URL", DEFAULT_BASE_URL)
   .option("--url <url>", "OpenTrace MCP endpoint or host (overrides --base-url)")
   .option("--client <id>", "Target client for the minted key: claude-code | claude-desktop | cursor")

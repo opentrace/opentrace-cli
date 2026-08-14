@@ -7,6 +7,7 @@ import { isInteractive } from "../util/tty.js"
 import { maskToken } from "../util/token.js"
 import { loginWithBrowser } from "../util/oauth/flow.js"
 import { connectWithKey } from "./connect.js"
+import { install } from "./install.js"
 
 interface LoginOptions {
   url?: string
@@ -23,9 +24,10 @@ interface LoginOptions {
 
 /**
  * `otx login` — sign in with the browser, trade the sign-in for a cli-scoped
- * otk_ key, then hand that key to the same machinery as `otx connect otk_…`
- * (probe, attach, usage-monitoring opt-in). Interactive by design — automation
- * passes a key instead, and that path is untouched.
+ * otk_ key, then onboard with it: the full `otx install` flow (Express or Custom,
+ * tool detection, scope, usage monitoring), or the single-client key flow when
+ * `--client` names one. Interactive by design — automation passes a key instead,
+ * and that path is untouched.
  */
 export async function login(opts: LoginOptions): Promise<void> {
   if (!isInteractive()) {
@@ -100,11 +102,36 @@ export async function login(opts: LoginOptions): Promise<void> {
   }
 
   console.log()
-  await connectWithKey(result.token, {
-    url: opts.url ?? opts.baseUrl,
-    client: opts.client,
+
+  // Where a client was named, that is an explicit narrow instruction — honour it
+  // exactly, via the single-client key flow. It is also the only route to Claude
+  // Desktop, which is a key client but not an installable integration, so this
+  // branch cannot be folded into the one below.
+  if (opts.client) {
+    await connectWithKey(result.token, {
+      url: opts.url ?? opts.baseUrl,
+      client: opts.client,
+      trackUsage: opts.trackUsage,
+      global: opts.global,
+      yes: opts.yes,
+    })
+    return
+  }
+
+  // Otherwise run the same onboarding `otx install` runs, with the freshly minted
+  // key in hand. This is the path the dashboard's one-liner takes, and it used to
+  // configure exactly one client — so the recommended way in gave a new user the
+  // narrowest possible setup, with no Express/Custom choice, no tool detection
+  // and no scope question. Signing in decides *how* you authenticate; it should
+  // not also decide how little gets set up.
+  await install(process.cwd(), {
+    baseUrl,
+    apiKey: result.token,
     trackUsage: opts.trackUsage,
     global: opts.global,
+    // `login` onboards a machine rather than a project, so the scope question
+    // leans the other way from `install`'s own default.
+    preferGlobal: true,
     yes: opts.yes,
   })
 }
