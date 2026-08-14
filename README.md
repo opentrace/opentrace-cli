@@ -76,6 +76,8 @@ otx connect otk_… --client cursor
 otx connect otk_… --url https://api.example.opentrace.ai
 ```
 
+Run it in a terminal with no `--client` and it routes into the full [`otx install` flow](#otx-connect-path--otx-install-path) — Express or Custom, tool detection, scope — the same as `otx login`. **Without a terminal (CI, a pipe), with `-y`, or with `--client`, it stays the narrow single-client attach described below**, so the server/CI usage the dashboard documents is unchanged.
+
 **Options:**
 
 | Flag | Description |

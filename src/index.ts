@@ -8,6 +8,7 @@ import { disconnect } from "./commands/disconnect.js"
 import { ALL_INTEGRATIONS } from "./util/detect.js"
 import { DEFAULT_BASE_URL, toBaseUrl, buildMcpUrl } from "./util/constants.js"
 import { looksLikeToken } from "./util/token.js"
+import { isInteractive } from "./util/tty.js"
 import { packageVersion } from "./util/version.js"
 import { printNotices } from "./util/notices.js"
 
@@ -117,6 +118,28 @@ connectCmd
       if (opts.apiKey && opts.apiKey !== tokenOrPath) {
         console.warn("Both a key argument and --api-key were given — using the key argument, ignoring --api-key.")
       }
+
+      // A person pasting the dashboard's receipt command gets the same onboarding
+      // `login` gives them: Express/Custom, tool detection, scope. Deliberately
+      // only when there is someone there to answer and no client was named —
+      // this command is also the documented way in on a server, in CI and over
+      // SSH, where the narrow single-client attach at user scope is the right
+      // behaviour and must not change under anyone's automation.
+      if (!opts.client && !opts.yes && isInteractive()) {
+        const { baseUrl, pluginUrl } = resolveEndpoint(opts)
+        await install(".", {
+          baseUrl,
+          pluginUrl,
+          apiKey: tokenOrPath,
+          trackUsage: explicitTrackUsage(connectCmd),
+          global: opts.global,
+          // Like `login`: a key names a machine, not a project.
+          preferGlobal: true,
+          toolOpts: opts as Record<string, unknown>,
+        })
+        return
+      }
+
       await connectWithKey(tokenOrPath, {
         url: opts.url,
         client: opts.client,

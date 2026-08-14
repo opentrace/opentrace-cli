@@ -124,6 +124,33 @@ describe("connect otk_… (key flow)", () => {
   })
 })
 
+describe("connect otk_… without a terminal", () => {
+  // The dashboard hands this command to people setting up a server, CI runner or
+  // SSH box. Interactively it now routes into the install flow; without a
+  // terminal it must stay exactly the narrow single-client attach it has always
+  // been, or that documented usage changes under everyone's automation.
+  it("attaches one client and does not run the installer", async () => {
+    // Cursor would be detected, so the installer would configure it too.
+    fs.mkdirSync(path.join(sb.home, ".cursor"), { recursive: true })
+    const r = await sb.run(["connect", CLI_KEY, ...url(), "--no-track-usage"])
+    assert.equal(r.code, 0)
+    assert.match(r.stdout, /Connected Claude Code \(plugin\)/)
+    // The installer's fingerprints, absent: no tool list, no Express plan, and
+    // nothing written for a second tool.
+    assert.doesNotMatch(r.output, /Express setup:/)
+    assert.equal(fs.existsSync(path.join(sb.home, ".cursor", "mcp.json")), false)
+    assert.equal(fs.existsSync(path.join(sb.project, ".cursor", "mcp.json")), false)
+  })
+
+  it("still honours -y the same way", async () => {
+    fs.mkdirSync(path.join(sb.home, ".cursor"), { recursive: true })
+    const r = await sb.run(["connect", CLI_KEY, ...url(), "-y", "--no-track-usage"])
+    assert.equal(r.code, 0)
+    assert.match(r.stdout, /Connected Claude Code \(plugin\)/)
+    assert.equal(fs.existsSync(path.join(sb.home, ".cursor", "mcp.json")), false)
+  })
+})
+
 describe("connect <path> (editor onboarding)", () => {
   it("routes a path to the install flow rather than the key flow", async () => {
     const r = await sb.run(["connect", sb.project, "-y", "--cursor", ...sb.base])
