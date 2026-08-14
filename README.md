@@ -51,7 +51,7 @@ What happens next depends on whether you named a client:
 - **No `--client`** (the dashboard's one-liner): the key goes into the full [`otx install` flow](#otx-connect-path--otx-install-path) — Express or Custom, tool detection, scope, usage monitoring. Signing in decides *how* you authenticate, not how little gets set up. The scope question leans towards **All projects** here, since signing in onboards a machine rather than a project.
 - **`--client <id>`**: an explicit narrow instruction, so it behaves exactly like `otx connect otk_…` and configures that one client. This is also the only way to reach **Claude Desktop**, which the key flow supports but `install` does not.
 
-**Options:** `--client <id>`, `--base-url <url>`, `--url <url>`, `--no-browser`, `--track-usage` / `--no-track-usage`, `-g, --global`, `-y, --yes`.
+**Options:** `--client <id>`, `--base-url <url>`, `--url <url>`, `--no-browser`, `--express`, `--track-usage` / `--no-track-usage`, `-g, --global`, `-y, --yes`.
 
 Notes:
 
@@ -76,7 +76,9 @@ otx connect otk_… --client cursor
 otx connect otk_… --url https://api.example.opentrace.ai
 ```
 
-Run it in a terminal with no `--client` and it routes into the full [`otx install` flow](#otx-connect-path--otx-install-path) — Express or Custom, tool detection, scope — the same as `otx login`. **Without a terminal (CI, a pipe), with `-y`, or with `--client`, it stays the narrow single-client attach described below**, so the server/CI usage the dashboard documents is unchanged.
+Run it in a terminal with no `--client` and it routes into the full [`otx install` flow](#otx-connect-path--otx-install-path) — Express or Custom, tool detection, scope — the same as `otx login`. `--express` takes that route too, terminal or not, since it asks for it outright. **Without a terminal (CI, a pipe), with `-y`, or with `--client`, it stays the narrow single-client attach described below**, so the server/CI usage the dashboard documents is unchanged.
+
+On that narrow path only `--client` is understood. Per-tool flags and `--express` are reported as ignored rather than dropped in silence — `--cursor` used to leave you with Claude Code configured instead. To set up several tools with a pasted key, use `otx install --api-key otk_…` with per-tool flags.
 
 **Options:**
 

@@ -15,6 +15,8 @@ interface LoginOptions {
   client?: string
   /** commander --no-browser ⇒ false; absent = true. */
   browser?: boolean
+  /** Skip the Express/Custom question and take Express. Ignored alongside --client. */
+  express?: boolean
   /** Explicit --track-usage / --no-track-usage; undefined = not stated (prompt or skip). */
   trackUsage?: boolean
   global?: boolean
@@ -108,6 +110,9 @@ export async function login(opts: LoginOptions): Promise<void> {
   // Desktop, which is a key client but not an installable integration, so this
   // branch cannot be folded into the one below.
   if (opts.client) {
+    if (opts.express) {
+      console.warn("--express has no effect with --client — that names a single client to attach.")
+    }
     await connectWithKey(result.token, {
       url: opts.url ?? opts.baseUrl,
       client: opts.client,
@@ -127,6 +132,7 @@ export async function login(opts: LoginOptions): Promise<void> {
   await install(process.cwd(), {
     baseUrl,
     apiKey: result.token,
+    express: opts.express,
     trackUsage: opts.trackUsage,
     global: opts.global,
     // `login` onboards a machine rather than a project, so the scope question

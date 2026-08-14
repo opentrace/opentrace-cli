@@ -5,7 +5,7 @@ import { install } from "./commands/install.js"
 import { connectWithKey } from "./commands/connect.js"
 import { login } from "./commands/login.js"
 import { disconnect } from "./commands/disconnect.js"
-import { ALL_INTEGRATIONS } from "./util/detect.js"
+import { ALL_INTEGRATIONS, integrationsFromFlags } from "./util/detect.js"
 import { DEFAULT_BASE_URL, toBaseUrl, buildMcpUrl } from "./util/constants.js"
 import { looksLikeToken } from "./util/token.js"
 import { isInteractive } from "./util/tty.js"
@@ -120,17 +120,22 @@ connectCmd
       }
 
       // A person pasting the dashboard's receipt command gets the same onboarding
-      // `login` gives them: Express/Custom, tool detection, scope. Deliberately
-      // only when there is someone there to answer and no client was named —
-      // this command is also the documented way in on a server, in CI and over
-      // SSH, where the narrow single-client attach at user scope is the right
+      // `login` gives them: Express/Custom, tool detection, scope.
+      //
+      // Reached when there is someone there to answer, or when --express asks for
+      // that flow outright — a flag the user typed is never silently dropped.
+      // NOT reached with --client, or on a server/CI/SSH run with no terminal,
+      // where the narrow single-client attach at user scope is the documented
       // behaviour and must not change under anyone's automation.
-      if (!opts.client && !opts.yes && isInteractive()) {
+      const wantsOnboarding =
+        !opts.client && (opts.express === true || (!opts.yes && isInteractive()))
+      if (wantsOnboarding) {
         const { baseUrl, pluginUrl } = resolveEndpoint(opts)
-        await install(".", {
+        await install(process.cwd(), {
           baseUrl,
           pluginUrl,
           apiKey: tokenOrPath,
+          express: opts.express,
           trackUsage: explicitTrackUsage(connectCmd),
           global: opts.global,
           // Like `login`: a key names a machine, not a project.
@@ -138,6 +143,22 @@ connectCmd
           toolOpts: opts as Record<string, unknown>,
         })
         return
+      }
+
+      // Past here it is the single-client attach, which understands --client and
+      // nothing else. Anything else the user asked for would be dropped in
+      // silence — and worse than silence: per-tool flags would leave them with
+      // the default client configured instead of the one they named.
+      if (opts.express) {
+        console.warn("--express has no effect with --client — that names a single client to attach.")
+      }
+      const ignored = integrationsFromFlags(opts as Record<string, unknown>)
+      if (ignored.length > 0) {
+        const labels = ignored.map((i) => i.label).join(", ")
+        console.warn(
+          `Ignoring ${labels}: a key argument attaches one client, chosen with --client. ` +
+            `Use \`otx install --api-key ${"otk_…"}\` with per-tool flags to set up several tools.`,
+        )
       }
 
       await connectWithKey(tokenOrPath, {
@@ -175,6 +196,7 @@ const loginCmd = program
   .option("--url <url>", "OpenTrace MCP endpoint or host (overrides --base-url)")
   .option("--client <id>", "Target client for the minted key: claude-code | claude-desktop | cursor")
   .option("--no-browser", "Don't launch a browser — print the sign-in URL to open manually")
+  .option("--express", "Skip the Express/Custom question: every detected tool, all projects, usage monitoring on")
   .option("--track-usage", "Monitor your Claude Code usage in OpenTrace without asking")
   .option("--no-track-usage", "Skip Claude Code usage monitoring without asking")
   .option("-g, --global", "User-level scope for the usage-monitoring settings file")
@@ -185,6 +207,7 @@ loginCmd.action(async (opts) => {
     baseUrl: opts.baseUrl,
     client: opts.client,
     browser: opts.browser,
+    express: opts.express,
     trackUsage: explicitTrackUsage(loginCmd),
     global: opts.global,
     yes: opts.yes,

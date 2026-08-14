@@ -1,7 +1,7 @@
 import path from "node:path"
 import fs from "node:fs"
 import { checkbox, confirm, password, select } from "@inquirer/prompts"
-import { ALL_INTEGRATIONS, detectInstalled } from "../util/detect.js"
+import { ALL_INTEGRATIONS, detectInstalled, integrationsFromFlags } from "../util/detect.js"
 import { DEFAULT_BASE_URL, buildMcpUrl, buildIngestUrl } from "../util/constants.js"
 import { isInteractive } from "../util/tty.js"
 import { maskToken, validateTokenShape } from "../util/token.js"
@@ -39,14 +39,9 @@ interface InstallCommandOptions {
   toolOpts?: Record<string, unknown>
 }
 
-function toCamelCase(id: string): string {
-  return id.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
-}
-
 /** Integrations named explicitly with per-tool flags (`--cursor`, `--zed`, …). */
 function flaggedTargets(opts: InstallCommandOptions): Integration[] {
-  const toolOpts = opts.toolOpts ?? {}
-  return ALL_INTEGRATIONS.filter(i => Boolean(toolOpts[toCamelCase(i.id)]))
+  return integrationsFromFlags(opts.toolOpts ?? {})
 }
 
 /**

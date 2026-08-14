@@ -142,6 +142,34 @@ describe("connect otk_… without a terminal", () => {
     assert.equal(fs.existsSync(path.join(sb.project, ".cursor", "mcp.json")), false)
   })
 
+  it("routes into the onboarding flow anyway when --express asks for it", async () => {
+    // A flag the user typed is never silently dropped — not even by the guard
+    // that keeps automation on the narrow path.
+    fs.mkdirSync(path.join(sb.home, ".cursor"), { recursive: true })
+    const r = await sb.run(["connect", CLI_KEY, ...url(), "--express", "--no-track-usage"])
+    assert.equal(r.code, 0)
+    assert.match(r.stdout, /Express setup:/)
+    assert.match(r.stdout, /Cursor/)
+  })
+
+  it("says so rather than silently ignoring per-tool flags", async () => {
+    // The trap: --cursor was dropped in silence AND the default client was
+    // configured instead, so the user got Claude Code having asked for Cursor.
+    const r = await sb.run(["connect", CLI_KEY, ...url(), "--cursor", "-y", "--no-track-usage"])
+    assert.equal(r.code, 0)
+    assert.match(r.output, /Ignoring Cursor/)
+    assert.match(r.output, /--client/)
+  })
+
+  it("says so rather than silently ignoring --express alongside --client", async () => {
+    const r = await sb.run([
+      "connect", CLI_KEY, ...url(), "--client", "claude-code", "--express", "--no-track-usage",
+    ])
+    assert.equal(r.code, 0)
+    assert.match(r.output, /--express has no effect with --client/)
+    assert.doesNotMatch(r.stdout, /Express setup:/)
+  })
+
   it("still honours -y the same way", async () => {
     fs.mkdirSync(path.join(sb.home, ".cursor"), { recursive: true })
     const r = await sb.run(["connect", CLI_KEY, ...url(), "-y", "--no-track-usage"])
