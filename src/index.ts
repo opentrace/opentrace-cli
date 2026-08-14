@@ -152,7 +152,7 @@ const loginCmd = program
   .option("--track-usage", "Monitor your Claude Code usage in OpenTrace without asking")
   .option("--no-track-usage", "Skip Claude Code usage monitoring without asking")
   .option("-g, --global", "User-level scope for the usage-monitoring settings file")
-  .option("-y, --yes", "Skip confirmation prompts (a TTY and browser are still required)")
+  .option("-y, --yes", "Take the default answer to every prompt — including keeping a CLI key that is still valid (a TTY and browser are still required)")
 loginCmd.action(async (opts) => {
   await login({
     url: opts.url,
@@ -171,7 +171,8 @@ program
   .option("--mcp", "Remove OpenTrace MCP server entries")
   .option("--plugin", "Remove the Claude Code plugin declaration")
   .option("--keychain", "Delete the stored API key from the OS keychain")
-  .option("--all", "Remove everything (MCP + plugin + keychain)")
+  .option("--usage", "Stop usage monitoring: remove the OTEL env block from Claude Code settings (both scopes)")
+  .option("--all", "Remove everything (MCP + plugin + keychain + usage monitoring)")
   .option("--client <id>", "Restrict MCP removal to one client (claude-code | claude-desktop | cursor | …)")
   .option("--url <url>", "Keychain endpoint whose key to delete (for a non-default host)")
   .option("-g, --global", "Also check user-level editor configs")
@@ -181,6 +182,7 @@ program
       mcp: opts.mcp,
       plugin: opts.plugin,
       keychain: opts.keychain,
+      usage: opts.usage,
       all: opts.all,
       client: opts.client,
       global: opts.global,

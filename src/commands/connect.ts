@@ -97,6 +97,9 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
       interactive: !opts.yes && isInteractive(),
       trackUsage: opts.trackUsage,
       cliToken: token,
+      // `connect` is always handed a key — pasted, or minted by `login` moments
+      // ago — so any usage key on file may belong to a different one.
+      explicitCliKey: true,
       targetsClaudeCode: clientId === "claude-code",
     })
     if (telemetry.note) console.log(`\n${telemetry.note}`)

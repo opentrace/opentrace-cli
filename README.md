@@ -134,25 +134,33 @@ Adds only the OpenTrace MCP server to a Claude Code project's `.mcp.json` (no pl
 Reverses what the CLI set up. Choose components; with none selected it prompts interactively (or removes everything under `-y`).
 
 ```bash
-otx disconnect --all                      # MCP entries + plugin + keychain key
+otx disconnect --all                      # MCP entries + plugin + keychain key + usage monitoring
 otx disconnect --mcp                       # just the MCP server entries
 otx disconnect --mcp --client cursor       # only Cursor's MCP entry
 otx disconnect --plugin                    # just the Claude Code plugin declaration
 otx disconnect --keychain --url https://…  # just the stored key for a host
+otx disconnect --usage                     # just stop usage monitoring
 ```
 
 **Options:**
 
 | Flag | Description |
 |------|-------------|
-| `--mcp` / `--plugin` / `--keychain` | Pick components (combine freely) |
-| `--all` | All three |
+| `--mcp` / `--plugin` / `--keychain` / `--usage` | Pick components (combine freely) |
+| `--all` | All four |
 | `--client <id>` | Restrict MCP removal to one client (`claude-code`, `claude-desktop`, `cursor`, …) |
 | `--url <url>` | Keychain endpoint whose key to delete (for a non-default host) |
 | `-g, --global` | Also check user-level editor configs |
 | `-y, --yes` | Skip prompts |
 
-It removes the OpenTrace entry from each client config it finds, drops the plugin's `extraKnownMarketplaces`/`enabledPlugins` declaration (run `claude plugin uninstall opentrace@opentrace` to also clear the installed plugin cache), and deletes the stored key from the OS keychain — for the API-key flow it auto-derives the keychain host from the config it removed, so `--all` needs no `--url`.
+It removes the OpenTrace entry from each client config it finds, drops the plugin's `extraKnownMarketplaces`/`enabledPlugins` declaration (run `claude plugin uninstall opentrace@opentrace` to also clear the installed plugin cache), deletes the stored key from the OS keychain — for the API-key flow it auto-derives the keychain host from the config it removed, so `--all` needs no `--url` — and stops usage monitoring.
+
+Two things worth knowing about `--usage`:
+
+- **It always covers both scopes**, regardless of `-g`. This is the one component whose leftovers keep *doing* something: an MCP entry the tool can no longer authenticate is inert, but a live telemetry block goes on exporting after a disconnect you believed was total.
+- **It only deletes the keys otx writes**, and only when the block is ours — identified by an OpenTrace ingest endpoint or an `otk_` credential. Your own env vars survive, `env` is dropped only if nothing is left in it, and a block pointing at your own collector is reported and left alone.
+
+The usage key itself stays valid server-side; removing the block just stops anything using it. Revoke it in the dashboard if you want it gone.
 
 ## What it writes
 
@@ -207,7 +215,24 @@ Opt-in, asked during `connect`/`install` (or forced with `--track-usage` / suppr
 }
 ```
 
-Existing `env` entries are preserved. The ingest endpoint follows the same host as everything else — pass `--url`/`--base-url` and it moves too. On re-runs, a usage key already in the target file is revalidated against the ingest endpoint and kept if still good — that check is what keeps re-runs converging on one key (the server mints a fresh key per provisioning call); a rejected one is replaced with a fresh key.
+Existing `env` entries are preserved. The ingest endpoint follows the same host as everything else — pass `--url`/`--base-url` and it moves too.
+
+### When the existing key is checked, kept, or replaced
+
+Whatever the run is doing, if monitoring is already configured it is **checked first**, before you are asked anything — so a revoked key is reported even on a run that goes on to decline monitoring, and even by `--no-track-usage`. That matters because the failure is otherwise silent: Claude Code has no way to tell you its exports are being turned away.
+
+Given a key already on file, and having decided to proceed:
+
+| Situation | What happens |
+|---|---|
+| Key still valid, and this run used a key already on the machine (keychain / plugin token) | **Kept.** This is what stops repeat `install` runs minting key after key, since the server provisions a fresh one per call. |
+| Key still valid, but this run brought its own CLI key (`connect otk_…`, `login`, `--api-key`, a pasted key) | **Replaced.** A usage key reports to whichever CLI key provisioned it, so keeping the old one would go on attributing your usage to the previous owner. |
+| Key rejected | **Replaced.** |
+| Key unverifiable (endpoint unreachable) | **Kept**, with a note — a network failure says nothing about a key. |
+
+Replacement is never destructive: if provisioning the new key fails, the existing block is left exactly as it was rather than removed. And the scope of an existing block wins over the run's default, so re-running against a global setup refreshes it in place instead of writing a second block at project level.
+
+Since a replaced key is not deleted server-side, reconnecting repeatedly leaves auto-created keys behind — they're tagged as such in your key list, and safe to prune.
 
 The usage key can only *write* telemetry (it is refused by the MCP and REST surfaces), so a leak from a committed `.claude/settings.json` cannot read your graph — but pick "All projects" if you'd rather keep it out of the repo entirely.
 

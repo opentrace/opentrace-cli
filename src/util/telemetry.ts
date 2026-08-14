@@ -52,6 +52,21 @@ export function telemetryEnv(baseUrl: string, token: string): Record<string, str
   }
 }
 
+/**
+ * Exactly the keys this CLI writes — the set `disconnect` is allowed to delete.
+ * Spelled out rather than derived from a dummy telemetryEnv() call so that
+ * adding a key to the block is a deliberate act in both directions.
+ */
+export const TELEMETRY_ENV_KEYS = [
+  "CLAUDE_CODE_ENABLE_TELEMETRY",
+  "OTEL_METRICS_EXPORTER",
+  "OTEL_LOGS_EXPORTER",
+  "OTEL_EXPORTER_OTLP_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_HEADERS",
+  "OTEL_METRICS_INCLUDE_ENTRYPOINT",
+] as const
+
 /** The usage key already configured in a settings file, if any. */
 export function readTelemetryToken(configPath: string): string | undefined {
   if (!fs.existsSync(configPath)) return undefined
@@ -75,6 +90,68 @@ export function hasTelemetryEnv(configPath: string): boolean {
     return settings.env?.CLAUDE_CODE_ENABLE_TELEMETRY !== undefined
   } catch {
     return false
+  }
+}
+
+/**
+ * Is the block in this file one WE wrote? Claude Code's OTEL settings are
+ * general-purpose — a user may well be exporting to their own collector — and
+ * `disconnect` must not delete that. Ours is identifiable two ways, either of
+ * which is conclusive: the endpoint is an OpenTrace ingest mount, or the
+ * credential is an OpenTrace key.
+ */
+export function isOpenTraceTelemetryBlock(configPath: string): boolean {
+  if (!fs.existsSync(configPath)) return false
+  try {
+    const settings = readJsonConfig<ClaudeSettings>(configPath, {})
+    const env = settings.env ?? {}
+    const endpoint = env.OTEL_EXPORTER_OTLP_ENDPOINT
+    if (typeof endpoint === "string" && endpoint.includes("/ingest/claude-code")) return true
+    return readTelemetryToken(configPath) !== undefined
+  } catch {
+    return false
+  }
+}
+
+export interface TelemetryRemoval {
+  removed: boolean
+  /** A telemetry block is present but points somewhere else — left untouched. */
+  foreign: boolean
+  /**
+   * Set when our own block was found but could not be removed — an unreadable or
+   * unwritable settings file. Distinguishes "failed" from "nothing to do", which
+   * otherwise look identical to the caller and leave telemetry running under a
+   * report of success.
+   */
+  error?: string
+}
+
+/**
+ * Delete the OTEL block from a settings file, and only the keys this CLI writes:
+ * unrelated env vars, and every other setting, survive. `env` itself is dropped
+ * when nothing is left in it, so disconnecting leaves no empty scaffolding
+ * behind. Refuses to touch a block aimed at someone else's collector.
+ */
+export function removeTelemetryEnv(configPath: string): TelemetryRemoval {
+  if (!fs.existsSync(configPath) || !hasTelemetryEnv(configPath)) {
+    return { removed: false, foreign: false }
+  }
+  if (!isOpenTraceTelemetryBlock(configPath)) {
+    return { removed: false, foreign: true }
+  }
+  try {
+    const settings = readJsonConfig<ClaudeSettings>(configPath, {})
+    const env = { ...(settings.env ?? {}) }
+    for (const key of TELEMETRY_ENV_KEYS) delete env[key]
+    if (Object.keys(env).length === 0) {
+      delete settings.env
+    } else {
+      settings.env = env
+    }
+    writeJsonConfig(configPath, settings)
+    return { removed: true, foreign: false }
+  } catch (err) {
+    return { removed: false, foreign: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
 
@@ -224,16 +301,62 @@ export interface TelemetryPlan {
   isGlobalScope: boolean
 }
 
+export interface ConfiguredTelemetry {
+  configPath: string
+  /** Absent when a block is present but carries no readable OpenTrace key. */
+  token?: string
+  state: "valid" | "invalid" | "unknown"
+}
+
+/**
+ * Monitoring already set up on this machine, and whether its key still works.
+ *
+ * Checked BEFORE anything is asked, because "is what you already have still
+ * working?" is worth answering on a run that is not about setting monitoring up
+ * — that used to be reachable only by opting in again, so a revoked key stayed
+ * silently revoked.
+ *
+ * Project settings override user settings key-for-key and the exporter
+ * credential is one key, so the project file is checked first: its copy is the
+ * one Claude Code actually sends. Stops at the first file carrying a block,
+ * which bounds this to a single request.
+ */
+export async function findConfiguredTelemetry(
+  dir: string,
+  baseUrl: string,
+): Promise<ConfiguredTelemetry | undefined> {
+  for (const configPath of [
+    claudeSettingsPath(dir, { global: false }),
+    claudeSettingsPath(dir, { global: true }),
+  ]) {
+    const token = readTelemetryToken(configPath)
+    if (!token) {
+      // A block with no readable key — hand-edited, or written by something
+      // else. Still "configured", just not something we can verify.
+      if (hasTelemetryEnv(configPath)) return { configPath, state: "unknown" }
+      continue
+    }
+    const state = await probeTelemetryKey(baseUrl, token)
+    if (state !== "unknown") {
+      recordKeyVerdict(usageKeyId(configPath), token, state === "valid" ? "valid" : "rejected")
+    }
+    return { configPath, token, state }
+  }
+  return undefined
+}
+
 /**
  * Decide whether — and into which settings file — the Claude Code OTEL env
  * block goes, and secure a usage key for it. All prompting and provisioning
  * happens here, before any file is written; the caller applies the plan.
  *
- * Key acquisition order: a valid usage key already in the target file is kept
- * (no server round-trip — this check is what keeps re-runs from minting key
- * after key, since the server provisions a fresh one per call); otherwise the
- * usage-key endpoint is called with the CLI key from the key step, or with
- * one prompted for here.
+ * Key acquisition order: a usage key already in the target file is kept when it
+ * still authenticates AND this run did not arrive with a CLI key of its own —
+ * that reuse is what keeps repeat `install` runs from minting key after key,
+ * since the server provisions a fresh one per call. A key supplied or minted
+ * this run (`connect otk_…`, `login`, `--api-key`, a pasted key) replaces it
+ * instead: the usage key belongs to whichever CLI key provisioned it, so keeping
+ * the old one would go on reporting to the previous owner.
  */
 export async function resolveTelemetryPlan(args: {
   dir: string
@@ -247,6 +370,13 @@ export async function resolveTelemetryPlan(args: {
   trackUsage?: boolean
   /** The CLI key the key step resolved (the same key that authenticates MCP), if any. */
   cliToken?: string
+  /**
+   * True when `cliToken` was supplied or minted on this run rather than read
+   * from local storage. Such a run may be a different account than the one that
+   * provisioned the usage key on file, so the key is re-provisioned rather than
+   * reused — there is no way to ask a key who owns it.
+   */
+  explicitCliKey?: boolean
   /** The env block only means anything to Claude Code — nothing is written (or asked) without it. */
   targetsClaudeCode: boolean
 }): Promise<{ plan?: TelemetryPlan; note?: string }> {
@@ -259,26 +389,60 @@ export async function resolveTelemetryPlan(args: {
       : {}
   }
 
+  // What is already set up, checked before anything is asked. A rejected key
+  // means nothing is reaching OpenTrace, and that is true whether or not this
+  // run was going to touch monitoring — so it is reported either way.
+  const existing = await findConfiguredTelemetry(args.dir, args.baseUrl)
+  if (existing?.state === "invalid") {
+    console.warn(`\nUsage monitoring is configured in ${existing.configPath}, but its key was rejected —`)
+    console.warn("nothing has been reaching your OpenTrace dashboard.")
+  }
+
   let want: boolean
   if (args.trackUsage !== undefined) {
     want = args.trackUsage
   } else if (args.interactive) {
     console.log()
-    console.log("Your Claude Code cost, tokens and session activity, on your own OpenTrace dashboard.")
-    console.log(`  ${USAGE_PRIVACY_NOTE}`)
-    want = await confirm({
-      message: "Monitor your Claude Code usage in OpenTrace?",
-      default: true,
-    })
+    if (existing?.state === "invalid") {
+      want = await confirm({ message: "Provision a fresh usage key and start monitoring again?", default: true })
+    } else if (existing?.state === "unknown") {
+      // A block is there but carries no key we can verify — hand-edited, or
+      // written by something else. Saying so beats the first-run question, which
+      // would imply nothing is configured and then quietly overwrite it.
+      console.log(`Usage monitoring is already configured in ${existing.configPath}, but its key could not be verified.`)
+      want = await confirm({ message: "Set it up again with a fresh usage key?", default: true })
+    } else if (existing?.state === "valid") {
+      // Already working. Offered rather than assumed, because saying yes here
+      // may replace the key (see explicitCliKey) rather than being a no-op.
+      console.log(`Your Claude Code usage is already reaching OpenTrace (key in ${existing.configPath}).`)
+      want = await confirm({ message: "Check and refresh usage monitoring?", default: true })
+    } else {
+      console.log("Your Claude Code cost, tokens and session activity, on your own OpenTrace dashboard.")
+      console.log(`  ${USAGE_PRIVACY_NOTE}`)
+      want = await confirm({ message: "Monitor your Claude Code usage in OpenTrace?", default: true })
+    }
   } else {
     // Not stated and nothing to ask — never write telemetry config silently.
     want = false
   }
-  if (!want) return {}
+  if (!want) {
+    // Declining leaves a dead block in place, which will go on failing quietly.
+    // Say where the off switch is rather than let it rot unmentioned.
+    return existing?.state === "invalid"
+      ? { note: `The rejected usage key is still in ${existing.configPath} — clear it with \`otx disconnect --usage\`.` }
+      : {}
+  }
 
   // An explicitly stated scope is final; the prompt only exists for the case
   // where "at which level?" was genuinely never answered. Interactive answers
   // from the caller's own scope question arrive as the select's default.
+  //
+  // Where monitoring is already configured, that file's scope outranks the
+  // caller's default: re-running against an existing setup should refresh it in
+  // place, not write a second block at the other level and leave two.
+  const existingScope = existing
+    ? existing.configPath === claudeSettingsPath(args.dir, { global: true })
+    : undefined
   const isGlobalScope =
     args.explicitGlobal ??
     (args.interactive
@@ -296,21 +460,34 @@ export async function resolveTelemetryPlan(args: {
               description: claudeSettingsPath(args.dir, { global: true }),
             },
           ],
-          default: args.isGlobal,
+          // Default to where monitoring already lives, so answering the scope
+          // question the other way is a deliberate move rather than the way to
+          // end up with two blocks in two files.
+          default: existingScope ?? args.isGlobal,
         })
-      : args.isGlobal)
+      : (existingScope ?? args.isGlobal))
   const configPath = claudeSettingsPath(args.dir, { global: isGlobalScope })
 
-  // 1. A usage key already in the target file, if it still authenticates.
+  // 1. The usage key already in the target file. Reused only when it still
+  //    authenticates AND this run brought no CLI key of its own — see
+  //    `explicitCliKey`. `existing` above may describe a different file (the
+  //    user picked the other scope), so this reads the chosen one.
   const existingToken = readTelemetryToken(configPath)
   if (existingToken) {
-    const state = await probeTelemetryKey(args.baseUrl, existingToken)
+    const state =
+      existing?.configPath === configPath && existing.token === existingToken
+        ? existing.state // already probed before the questions — don't ask twice
+        : await probeTelemetryKey(args.baseUrl, existingToken)
     // Hand the verdict to the notice banner, which would otherwise have to ask
     // the ingest endpoint the same question again on the next run.
     if (state !== "unknown") {
       recordKeyVerdict(usageKeyId(configPath), existingToken, state === "valid" ? "valid" : "rejected")
     }
-    if (state !== "invalid") {
+    if (state !== "invalid" && args.explicitCliKey) {
+      console.log(
+        `  ↻ replacing the usage key in ${configPath} — this run signed in with its own CLI key, and a usage key reports to whichever key provisioned it.`,
+      )
+    } else if (state !== "invalid") {
       if (state === "unknown") {
         console.warn(`Note: could not verify the usage key already in ${configPath} — keeping it.`)
       } else {
@@ -319,8 +496,9 @@ export async function resolveTelemetryPlan(args: {
       return {
         plan: { configPath, env: telemetryEnv(args.baseUrl, existingToken), reusedExisting: true, isGlobalScope },
       }
+    } else {
+      console.warn("The usage key already configured was rejected at the ingest endpoint — minting a fresh one.")
     }
-    console.warn("The usage key already configured was rejected at the ingest endpoint — minting a fresh one.")
   }
 
   // 2. Get-or-create one with the CLI key. The key step may not have produced
