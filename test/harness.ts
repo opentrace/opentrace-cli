@@ -31,6 +31,27 @@ const CLI_ENTRY = new URL("../../dist/index.js", import.meta.url).pathname
 /** Everything the OpenTrace API serves — as opposed to the registry lookup. */
 const API_PATH_PREFIXES = ["/mcp/v1", "/claude-code-usage/", "/ingest/", "/.well-known/", "/cli/"]
 
+/** Where Windows keeps roaming app data inside a sandbox. */
+const appDataFor = (home: string): string => path.join(home, "AppData", "Roaming")
+
+/**
+ * The Claude desktop app's config directory inside a sandbox home. Mirrors
+ * claudeAppDir() in src/util/claude-app.ts, which cannot be reused directly: it
+ * resolves against this process's own HOME, not the sandbox's. Tests must build
+ * these paths through here rather than hardcoding `.config/Claude`, which is
+ * Linux-only and silently tests nothing on macOS.
+ */
+function claudeAppDirFor(home: string): string {
+  switch (process.platform) {
+    case "darwin":
+      return path.join(home, "Library", "Application Support", "Claude")
+    case "win32":
+      return path.join(appDataFor(home), "Claude")
+    default:
+      return path.join(home, ".config", "Claude")
+  }
+}
+
 export interface RunResult {
   code: number | null
   stdout: string
@@ -73,6 +94,14 @@ export interface Sandbox {
    * rather than fail for the wrong reason.
    */
   seedKeychainKey(token: string): boolean
+  /** The Claude desktop app's config directory for this sandbox, per platform. */
+  claudeAppDir(): string
+  /** The chat surface's MCP config, which the Code tab also reads. */
+  claudeDesktopConfigPath(): string
+  /** Pretend the desktop app is installed but its Code tab has never been opened. */
+  seedClaudeApp(): void
+  /** Pretend the Code tab has run — it downloads its own engine build. */
+  seedClaudeCodeDesktop(): void
   /** The notice-banner cache, so tests can seed or inspect verdicts. */
   statePath(): string
   readState(): Record<string, any>
@@ -122,6 +151,9 @@ export async function createSandbox(stubOptions: Partial<StubOptions> = {}): Pro
         HOME: home,
         USERPROFILE: home, // os.homedir() reads this on Windows
         XDG_CONFIG_HOME: path.join(home, ".config"),
+        // Without this the Windows app-dir lookup escapes the sandbox and reads
+        // the real user's roaming profile.
+        APPDATA: appDataFor(home),
         OTX_KEYCHAIN_SERVICE: keychainService,
         OTX_REGISTRY_URL: stub.url,
         OTX_FORCE_NOTICES: "1",
@@ -197,6 +229,15 @@ export async function createSandbox(stubOptions: Partial<StubOptions> = {}): Pro
       } catch {
         return false
       }
+    },
+
+    claudeAppDir: () => claudeAppDirFor(home),
+    claudeDesktopConfigPath: () => path.join(claudeAppDirFor(home), "claude_desktop_config.json"),
+    seedClaudeApp() {
+      fs.mkdirSync(claudeAppDirFor(home), { recursive: true })
+    },
+    seedClaudeCodeDesktop() {
+      fs.mkdirSync(path.join(claudeAppDirFor(home), "claude-code", "2.1.222"), { recursive: true })
     },
 
     statePath,

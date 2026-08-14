@@ -58,6 +58,15 @@ describe("key notices", () => {
   it("reports a rejected CLI key on a command that does not check one itself", async (t) => {
     // Must come from the keychain: it is endpoint-scoped, so it is the only
     // store that can describe a non-default endpoint (see the test below).
+    //
+    // Which makes this one unrunnable on macOS: a generic-password item's ACL is
+    // scoped to the process that created it, so the CLI child cannot read what
+    // this test wrote — the notice would be absent for a reason that says nothing
+    // about the code. On Linux CI there is no Secret Service at all and the seed
+    // reports that itself.
+    if (process.platform === "darwin") {
+      return t.skip("macOS scopes keychain items to the creating process, so a child cannot read them")
+    }
     if (!sb.seedKeychainKey(CLI_KEY)) return t.skip("no OS keychain backend on this machine")
     sb.stub.options.revoked.add(CLI_KEY)
     const r = await sb.run(["add-mcp", sb.project, "-y", ...sb.base])

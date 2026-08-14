@@ -102,12 +102,14 @@ describe("connect otk_… (key flow)", () => {
   })
 
   it("writes a header entry plus a bridge note for Claude Desktop", async () => {
-    fs.mkdirSync(path.join(sb.home, ".config", "Claude"), { recursive: true })
+    // Via the harness, because the app directory is platform-specific — a
+    // hardcoded .config/Claude passes on Linux and tests nothing on macOS.
+    sb.seedClaudeApp()
     const r = await sb.run(["connect", CLI_KEY, ...url(), "--client", "claude-desktop", "--no-track-usage"])
     assert.equal(r.code, 0)
-    const cfg = JSON.parse(
-      fs.readFileSync(path.join(sb.home, ".config", "Claude", "claude_desktop_config.json"), "utf8"),
-    ) as { mcpServers: Record<string, { command: string; args: string[] }> }
+    const cfg = JSON.parse(fs.readFileSync(sb.claudeDesktopConfigPath(), "utf8")) as {
+      mcpServers: Record<string, { command: string; args: string[] }>
+    }
     assert.equal(cfg.mcpServers.opentrace.command, "npx")
     assert.ok(cfg.mcpServers.opentrace.args.includes("mcp-remote"))
     assert.match(r.output, /mcp-remote/)
@@ -115,7 +117,7 @@ describe("connect otk_… (key flow)", () => {
 
   it("warns that claude_desktop_config.json shadows the native mount in Code sessions", async () => {
     // Only when the Code tab is actually present on the machine.
-    fs.mkdirSync(path.join(sb.home, ".config", "Claude", "claude-code", "2.1.222"), { recursive: true })
+    sb.seedClaudeCodeDesktop()
     const r = await sb.run(["connect", CLI_KEY, ...url(), "--client", "claude-desktop", "--no-track-usage"])
     assert.equal(r.code, 0)
     assert.match(r.output, /Code-tab sessions will use the npx bridge/)
