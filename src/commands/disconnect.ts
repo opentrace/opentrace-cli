@@ -2,10 +2,11 @@ import path from "node:path"
 import { select, checkbox, confirm } from "@inquirer/prompts"
 import { ALL_INTEGRATIONS } from "../util/detect.js"
 import { KEY_CLIENTS } from "../key-clients/index.js"
-import { SERVER_KEY, DEFAULT_BASE_URL, normalizeMcpUrl } from "../util/constants.js"
+import { SERVER_KEY, DEFAULT_BASE_URL, MARKETPLACE_NAME, PLUGIN_NAME, normalizeMcpUrl, pluginId } from "../util/constants.js"
 import { hasJsonEntry } from "../util/json-config.js"
 import { deleteToken, getToken, KeychainUnavailableError } from "../util/keychain.js"
 import { claudeSettingsPath, hasTelemetryEnv, removeTelemetryEnv } from "../util/telemetry.js"
+import { removeInstalledPlugin } from "../util/claude-plugins.js"
 import claudeCode from "../integrations/claude-code.js"
 
 interface DisconnectOptions {
@@ -155,14 +156,37 @@ export async function disconnect(targetPath: string, opts: DisconnectOptions): P
 
   // ---- Plugin ----
   if (components.includes("plugin") && claudeCode.plugin) {
-    // remove() is scope-complete: project + user declaration, pluginConfigs, and the key file.
+    // remove() clears the declaration: project + user settings, pluginConfigs and
+    // the key file.
     const r = claudeCode.plugin.remove(dir, { global: isGlobal })
     if (r.removed) {
       didSomething = true
       console.log("  ✓ removed OpenTrace plugin (declaration, mcp_url, API-key file)")
-      console.log("    (also run `claude plugin uninstall opentrace@opentrace` to drop the installed plugin cache)")
     } else {
       console.log("No OpenTrace plugin declaration found.")
+    }
+
+    // Removing the declaration takes the MCP server away but leaves the plugin
+    // listed in `/plugin`, because that reads Claude Code's own install records.
+    // Attempted whatever the declaration turned out to be — a machine can have
+    // the plugin installed with the declaration already gone, and that is exactly
+    // the state that used to be unreachable without `claude plugin uninstall`.
+    const cache = removeInstalledPlugin(pluginId(), MARKETPLACE_NAME, PLUGIN_NAME)
+    if (cache.uninstalled || cache.marketplaceForgotten) {
+      didSomething = true
+      const parts: string[] = []
+      if (cache.uninstalled) parts.push("uninstalled")
+      if (cache.marketplaceForgotten) parts.push("marketplace forgotten")
+      console.log(`  ✓ removed OpenTrace from Claude Code's plugin list (${parts.join(", ")})`)
+      for (const removed of cache.removedPaths) {
+        console.log(`    deleted ${removed}`)
+      }
+      console.log("    Restart Claude Code (or /reload-plugins) for `/plugin` to catch up.")
+    }
+    for (const file of cache.skipped) {
+      // Better to say so than to report a clean disconnect that is not one.
+      console.warn(`  ! left ${file} alone — it is not in a format this version understands.`)
+      console.warn("    Run `claude plugin uninstall opentrace@opentrace` to finish removing it.")
     }
   }
 

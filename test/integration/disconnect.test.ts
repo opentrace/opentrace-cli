@@ -75,6 +75,89 @@ describe("disconnect --usage", () => {
   })
 })
 
+describe("disconnect --plugin and Claude Code's plugin list", () => {
+  /**
+   * What `/plugin` reads. Removing the settings declaration takes the MCP server
+   * away but leaves these, which is why the plugin went on being listed as
+   * installed after a disconnect that reported success.
+   */
+  function seedInstalled(): { installDir: string; marketplaceDir: string } {
+    const plugins = path.join(sb.home, ".claude", "plugins")
+    const installDir = path.join(plugins, "cache", "opentrace", "opentrace", "0.6.0")
+    const marketplaceDir = path.join(plugins, "marketplaces", "opentrace")
+    fs.mkdirSync(installDir, { recursive: true })
+    fs.mkdirSync(marketplaceDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(plugins, "installed_plugins.json"),
+      JSON.stringify({
+        version: 2,
+        plugins: {
+          "other@somewhere": [{ scope: "user", installPath: path.join(plugins, "cache", "other") }],
+          "opentrace@opentrace": [{ scope: "user", installPath: installDir, version: "0.6.0" }],
+        },
+      }),
+    )
+    fs.writeFileSync(
+      path.join(plugins, "known_marketplaces.json"),
+      JSON.stringify({
+        somewhere: { source: { source: "github", repo: "a/b" } },
+        opentrace: { source: { source: "github", repo: "opentrace/opentrace-cli" }, installLocation: marketplaceDir },
+      }),
+    )
+    return { installDir, marketplaceDir }
+  }
+
+  const installedPlugins = (): any =>
+    JSON.parse(fs.readFileSync(path.join(sb.home, ".claude", "plugins", "installed_plugins.json"), "utf8"))
+
+  it("stops listing the plugin, and says a restart is needed for /plugin to catch up", async () => {
+    await sb.run(["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base])
+    const { installDir, marketplaceDir } = seedInstalled()
+
+    const r = await sb.run(["disconnect", sb.project, "--plugin", "-y"])
+    assert.equal(r.code, 0)
+    assert.match(r.stdout, /removed OpenTrace from Claude Code's plugin list/)
+    assert.match(r.stdout, /Restart Claude Code/)
+
+    assert.equal("opentrace@opentrace" in installedPlugins().plugins, false)
+    assert.equal(fs.existsSync(installDir), false)
+    assert.equal(fs.existsSync(marketplaceDir), false)
+  })
+
+  it("leaves other plugins and marketplaces alone", async () => {
+    seedInstalled()
+    await sb.run(["disconnect", sb.project, "--plugin", "-y"])
+    assert.ok(installedPlugins().plugins["other@somewhere"], "another plugin survives")
+    const known = JSON.parse(
+      fs.readFileSync(path.join(sb.home, ".claude", "plugins", "known_marketplaces.json"), "utf8"),
+    ) as Record<string, unknown>
+    assert.ok(known.somewhere, "another marketplace survives")
+    assert.equal("opentrace" in known, false)
+  })
+
+  it("cleans the list even when the declaration is already gone", async () => {
+    // The state that used to be unreachable: settings cleaned by an earlier
+    // disconnect, plugin still installed.
+    seedInstalled()
+    const r = await sb.run(["disconnect", sb.project, "--plugin", "-y"])
+    assert.equal(r.code, 0)
+    assert.match(r.stdout, /No OpenTrace plugin declaration found/)
+    assert.match(r.stdout, /removed OpenTrace from Claude Code's plugin list/)
+    assert.equal("opentrace@opentrace" in installedPlugins().plugins, false)
+  })
+
+  it("no longer tells the user to run claude plugin uninstall", async () => {
+    seedInstalled()
+    const r = await sb.run(["disconnect", sb.project, "--plugin", "-y"])
+    assert.doesNotMatch(r.output, /claude plugin uninstall/)
+  })
+
+  it("says nothing about the plugin list on a machine that never installed it", async () => {
+    const r = await sb.run(["disconnect", sb.project, "--plugin", "-y"])
+    assert.doesNotMatch(r.stdout, /Claude Code's plugin list/)
+  })
+})
+
 describe("disconnect --all", () => {
   it("includes usage monitoring", async () => {
     sb.seedTelemetry("user", otk("usage"))
