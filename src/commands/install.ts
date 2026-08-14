@@ -701,9 +701,4 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   } else if (attachedKey) {
     console.log("  2. That's it — your API key is already attached.")
   }
-
-  if (attachedKey) {
-    console.log()
-    console.log("Heads up: API keys can expire or be revoked — if calls start returning 401, reconnect with a fresh key.")
-  }
 }
