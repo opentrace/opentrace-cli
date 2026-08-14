@@ -42,6 +42,46 @@ export async function login(opts: LoginOptions): Promise<void> {
   const baseUrl = toBaseUrl(endpoint)
   const mcpUrl = normalizeMcpUrl(endpoint)
 
+  /**
+   * Set up this machine with `token`, however we came by it — freshly minted, or
+   * already on file. Shared so that keeping an existing key is not a reason to
+   * stop short of the setup the command exists to perform.
+   *
+   * Where a client was named, that is an explicit narrow instruction — honour it
+   * exactly, via the single-client key flow. It is also the only route to Claude
+   * Desktop, which is a key client but not an installable integration, so this
+   * branch cannot be folded into the one below.
+   */
+  const onboard = async (token: string): Promise<void> => {
+    if (opts.client) {
+      if (opts.express) {
+        console.warn("--express has no effect with --client — that names a single client to attach.")
+      }
+      await connectWithKey(token, {
+        url: opts.url ?? opts.baseUrl,
+        client: opts.client,
+        trackUsage: opts.trackUsage,
+        global: opts.global,
+        yes: opts.yes,
+      })
+      return
+    }
+    // Otherwise the same onboarding `otx install` runs, with the key in hand:
+    // Express/Custom, tool detection, scope, usage monitoring. Signing in decides
+    // *how* you authenticate; it should not also decide how little gets set up.
+    await install(process.cwd(), {
+      baseUrl,
+      apiKey: token,
+      express: opts.express,
+      trackUsage: opts.trackUsage,
+      global: opts.global,
+      // `login` onboards a machine rather than a project, so the scope question
+      // leans the other way from `install`'s own default.
+      preferGlobal: true,
+      yes: opts.yes,
+    })
+  }
+
   // Every sign-in mints a fresh server-side key, so a machine that already holds
   // a working one keeps it.
   //
@@ -68,11 +108,17 @@ export async function login(opts: LoginOptions): Promise<void> {
             default: false,
           })
       if (!again) {
-        console.log("Keeping the existing key — attach it to a client with `otx install` or `otx connect`.")
+        // Declining a *new* key is not declining setup. This is the command the
+        // dashboard hands people, so a returning user who already has a working
+        // key must still end up configured — rather than being told to go and run
+        // a different command, which is what used to happen here.
+        console.log("Keeping the existing key — setting up with it.")
         // Said only where it explains the absence of a question.
         if (opts.yes) {
           console.log("(-y keeps a valid key; re-run without -y to be asked about minting a fresh one.)")
         }
+        console.log()
+        await onboard(stored)
         return
       }
     }
@@ -104,40 +150,5 @@ export async function login(opts: LoginOptions): Promise<void> {
   }
 
   console.log()
-
-  // Where a client was named, that is an explicit narrow instruction — honour it
-  // exactly, via the single-client key flow. It is also the only route to Claude
-  // Desktop, which is a key client but not an installable integration, so this
-  // branch cannot be folded into the one below.
-  if (opts.client) {
-    if (opts.express) {
-      console.warn("--express has no effect with --client — that names a single client to attach.")
-    }
-    await connectWithKey(result.token, {
-      url: opts.url ?? opts.baseUrl,
-      client: opts.client,
-      trackUsage: opts.trackUsage,
-      global: opts.global,
-      yes: opts.yes,
-    })
-    return
-  }
-
-  // Otherwise run the same onboarding `otx install` runs, with the freshly minted
-  // key in hand. This is the path the dashboard's one-liner takes, and it used to
-  // configure exactly one client — so the recommended way in gave a new user the
-  // narrowest possible setup, with no Express/Custom choice, no tool detection
-  // and no scope question. Signing in decides *how* you authenticate; it should
-  // not also decide how little gets set up.
-  await install(process.cwd(), {
-    baseUrl,
-    apiKey: result.token,
-    express: opts.express,
-    trackUsage: opts.trackUsage,
-    global: opts.global,
-    // `login` onboards a machine rather than a project, so the scope question
-    // leans the other way from `install`'s own default.
-    preferGlobal: true,
-    yes: opts.yes,
-  })
+  await onboard(result.token)
 }

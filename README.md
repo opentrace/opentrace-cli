@@ -46,7 +46,7 @@ otx login --url https://api.example.opentrace.ai
 
 It runs an OAuth loopback flow (dynamic client registration + PKCE) against your OpenTrace host and exchanges the sign-in for a `cli`-scoped key. The sign-in token itself is discarded — the CLI keeps only the minted key.
 
-What happens next depends on whether you named a client:
+What happens next is the same whether the key was just minted or was already on this machine — and depends only on whether you named a client:
 
 - **No `--client`** (the dashboard's one-liner): the key goes into the full [`otx install` flow](#otx-connect-path--otx-install-path) — Express or Custom, tool detection, scope, usage monitoring. Signing in decides *how* you authenticate, not how little gets set up. The scope question leans towards **All projects** here, since signing in onboards a machine rather than a project.
 - **`--client <id>`**: an explicit narrow instruction, so it behaves exactly like `otx connect otk_…` and configures that one client. This is also the only way to reach **Claude Desktop**, which the key flow supports but `install` does not.
@@ -57,7 +57,7 @@ Notes:
 
 - **Needs a TTY and a local browser.** In automation use `otx connect otk_…` — `otx login` refuses to run non-interactively rather than hanging.
 - Over SSH or on a headless box the redirect can't reach you (it lands on `127.0.0.1` of the machine running otx); the CLI says so and points you at the key flow.
-- If this machine already holds a valid key, it asks before signing in again rather than minting a duplicate; `-y` takes that question's default and keeps the existing key.
+- If this machine already holds a valid key, it asks before signing in again rather than minting a duplicate; `-y` takes that question's default and keeps it. Either way it **goes on to set your tools up with that key** — declining a new key is not declining setup.
 - Self-hosted deployments without OAuth dynamic registration enabled report that browser sign-in isn't available — paste a key instead.
 
 ### `otx connect otk_<key> [--url <host>] [--client <id>]`
