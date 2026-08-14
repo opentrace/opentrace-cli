@@ -28,6 +28,9 @@ const require = createRequire(import.meta.url)
 /** The built CLI. Integration tests exercise the real entry point, not imports. */
 const CLI_ENTRY = new URL("../../dist/index.js", import.meta.url).pathname
 
+/** Everything the OpenTrace API serves — as opposed to the registry lookup. */
+const API_PATH_PREFIXES = ["/mcp/v1", "/claude-code-usage/", "/ingest/", "/.well-known/", "/cli/"]
+
 export interface RunResult {
   code: number | null
   stdout: string
@@ -48,7 +51,9 @@ export interface Sandbox {
   /**
    * Requests to the OpenTrace API only. The notice banner looks up the latest
    * version on virtually every command, so `stub.requests` is never empty and
-   * "did this command talk to the API?" has to exclude that.
+   * "did this command talk to the API?" has to exclude that. Matched by what the
+   * API *is* rather than by excluding what it isn't, so a route added to the stub
+   * later cannot quietly start counting as an API call.
    */
   apiRequests(): StubRequest[]
   /** Path of the Claude settings file at the given scope. */
@@ -149,7 +154,10 @@ export async function createSandbox(stubOptions: Partial<StubOptions> = {}): Pro
       })
     },
 
-    apiRequests: () => stub.requests.filter((q) => !q.path.endsWith("/latest")),
+    apiRequests: () =>
+      stub.requests.filter((q) =>
+        API_PATH_PREFIXES.some((prefix) => q.path.startsWith(prefix)),
+      ),
 
     settingsPath,
     readSettings: (scope) => readJson(settingsPath(scope)),

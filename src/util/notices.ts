@@ -83,12 +83,20 @@ function tildify(filePath: string): string {
 // Update check
 // ---------------------------------------------------------------------------
 
-/** Overridable so tests can serve version metadata locally instead of reaching npm. */
-const REGISTRY_URL = process.env.OTX_REGISTRY_URL ?? "https://registry.npmjs.org"
+/**
+ * Overridable so tests can serve version metadata locally instead of reaching
+ * npm. Read per call rather than once at module load: a top-level const freezes
+ * whatever the environment held at first import, which is invisible in the CLI
+ * (one process, one value) but silently defeats any in-process test that sets the
+ * variable after importing this module.
+ */
+function registryUrl(): string {
+  return (process.env.OTX_REGISTRY_URL ?? "https://registry.npmjs.org").replace(/\/$/, "")
+}
 
 async function fetchLatestVersion(): Promise<string | undefined> {
   // A scoped name is one path segment to the registry, so it is encoded as one.
-  const url = `${REGISTRY_URL.replace(/\/$/, "")}/${encodeURIComponent(packageName())}/latest`
+  const url = `${registryUrl()}/${encodeURIComponent(packageName())}/latest`
   try {
     const res = await fetch(url, {
       headers: { Accept: "application/json" },

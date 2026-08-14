@@ -22,8 +22,10 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-# stdout carries the eval-able exports, so build chatter goes to stderr.
-npm run --silent clean >&2 2>/dev/null || true
+# stdout carries the eval-able exports, so build chatter goes to stderr. Errors
+# stay visible there: `2>/dev/null` here would silence a real failure (an
+# unwritable dist/, say) and leave the script packing a stale build.
+npm run --silent clean >&2 || true
 npm run --silent build >&2
 
 pack_dir="$(mktemp -d)"

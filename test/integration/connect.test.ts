@@ -74,7 +74,8 @@ describe("connect otk_… (key flow)", () => {
   it("sets up usage monitoring with the same key", async () => {
     const r = await sb.run(["connect", CLI_KEY, ...url(), "--track-usage", "-g"])
     assert.equal(r.code, 0)
-    assert.match(r.stdout, /Usage monitoring (enabled|updated)/)
+    // "enabled", not "updated": nothing was configured before this run.
+    assert.match(r.stdout, /Usage monitoring enabled/)
     const user = sb.readSettings("user")
     assert.ok(hasTelemetry(user))
     assert.equal(telemetryToken(user), sb.stub.options.mintedUsageKey)
