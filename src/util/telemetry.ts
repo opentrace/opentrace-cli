@@ -16,7 +16,15 @@ import { confirm, password, select } from "@inquirer/prompts"
 import { readJsonConfig, writeJsonConfig } from "./json-config.js"
 import { buildIngestUrl, buildTelemetryKeyUrl } from "./constants.js"
 import { TOKEN_REGEX, maskToken, validateTokenShape } from "./token.js"
-import { recordKeyVerdict, usageKeyId } from "./notice-state.js"
+import { freshKeyVerdict, recordKeyVerdict, usageKeyId } from "./notice-state.js"
+
+/**
+ * Deadline for the "is what you already have still working?" probe, which runs
+ * before any question is asked. Unlike the probes whose answer the user is
+ * actively waiting for, this one only decides whether to print a warning, so
+ * stalling a whole run on it would be the wrong trade.
+ */
+const PRE_QUESTION_PROBE_MS = 3_000
 
 interface ClaudeSettings {
   env?: Record<string, string>
@@ -320,6 +328,12 @@ export interface ConfiguredTelemetry {
  * credential is one key, so the project file is checked first: its copy is the
  * one Claude Code actually sends. Stops at the first file carrying a block,
  * which bounds this to a single request.
+ *
+ * Costs nothing in the common case: this runs before the user has said whether
+ * they even want monitoring, and the notice banner has usually asked the ingest
+ * endpoint this exact question moments earlier in the same process — so a fresh
+ * verdict is reused rather than re-probed. Where there is none, the probe gets a
+ * deadline: this answer only feeds a warning, and a run must not stall on it.
  */
 export async function findConfiguredTelemetry(
   dir: string,
@@ -336,7 +350,10 @@ export async function findConfiguredTelemetry(
       if (hasTelemetryEnv(configPath)) return { configPath, state: "unknown" }
       continue
     }
-    const state = await probeTelemetryKey(baseUrl, token)
+    const cached = freshKeyVerdict(usageKeyId(configPath), token)
+    if (cached) return { configPath, token, state: cached === "valid" ? "valid" : "invalid" }
+
+    const state = await probeTelemetryKey(baseUrl, token, { timeoutMs: PRE_QUESTION_PROBE_MS })
     if (state !== "unknown") {
       recordKeyVerdict(usageKeyId(configPath), token, state === "valid" ? "valid" : "rejected")
     }
@@ -487,6 +504,9 @@ export async function resolveTelemetryPlan(args: {
       console.log(
         `  ↻ replacing the usage key in ${configPath} — this run signed in with its own CLI key, and a usage key reports to whichever key provisioned it.`,
       )
+      // DELIBERATELY no return: falls through to provisioning below. The sibling
+      // branch does return, so adding one here "for symmetry" would silently
+      // turn every replacement back into a reuse.
     } else if (state !== "invalid") {
       if (state === "unknown") {
         console.warn(`Note: could not verify the usage key already in ${configPath} — keeping it.`)

@@ -158,7 +158,7 @@ It removes the OpenTrace entry from each client config it finds, drops the plugi
 Two things worth knowing about `--usage`:
 
 - **It always covers both scopes**, regardless of `-g`. This is the one component whose leftovers keep *doing* something: an MCP entry the tool can no longer authenticate is inert, but a live telemetry block goes on exporting after a disconnect you believed was total.
-- **It only deletes the keys otx writes**, and only when the block is ours — identified by an OpenTrace ingest endpoint or an `otk_` credential. Your own env vars survive, `env` is dropped only if nothing is left in it, and a block pointing at your own collector is reported and left alone.
+- **It only deletes the keys otx writes**, and only when the block looks like ours — identified by an OpenTrace ingest endpoint *or* an `otk_` credential. Your own env vars survive, and `env` is dropped only if nothing is left in it. A block pointing at your own collector is reported and left alone, with one caveat: the check is a heuristic, so a collector of your own served from a path containing `/ingest/claude-code` would be treated as ours.
 
 The usage key itself stays valid server-side; removing the block just stops anything using it. Revoke it in the dashboard if you want it gone.
 

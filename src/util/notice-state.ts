@@ -39,6 +39,13 @@ export function noticeStatePath(): string {
   return path.join(os.homedir(), ".opentrace", "state.json")
 }
 
+/**
+ * How long a recorded verdict is trusted. Shared so the banner and the
+ * onboarding path cannot drift apart about what "recently checked" means —
+ * they read each other's answers.
+ */
+export const KEY_VERDICT_TTL_MS = 12 * 60 * 60 * 1000
+
 /** The verdict key for a CLI key, scoped to the endpoint it was judged against. */
 export function cliKeyId(mcpUrl: string): string {
   return `cli:${mcpUrl}`
@@ -94,4 +101,15 @@ export function readKeyVerdict(id: string, token: string): { verdict: KeyVerdict
   const cached = readNoticeState().verdicts?.[id]
   if (!cached || cached.fingerprint !== fingerprint(token)) return undefined
   return { verdict: cached.verdict, at: cached.at }
+}
+
+/**
+ * The cached verdict for `token` if it is recent enough to act on. Lets a caller
+ * skip a network round-trip entirely — notably the notice banner runs in the same
+ * process, moments earlier, and has usually already asked this exact question.
+ */
+export function freshKeyVerdict(id: string, token: string): KeyVerdict | undefined {
+  const cached = readKeyVerdict(id, token)
+  if (!cached || Date.now() - cached.at >= KEY_VERDICT_TTL_MS) return undefined
+  return cached.verdict
 }

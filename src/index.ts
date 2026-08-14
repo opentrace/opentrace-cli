@@ -191,10 +191,38 @@ program
     })
   })
 
-program.parseAsync(process.argv).catch((err: unknown) => {
-  if (err instanceof Error && err.message.includes("force closed")) {
-    process.exit(0)
-  }
-  console.error(err instanceof Error ? err.message : String(err))
-  process.exit(1)
-})
+/**
+ * Wait for stdout and stderr to drain, then exit.
+ *
+ * Needed because a bounded request does not imply a bounded process. Every probe
+ * this CLI makes has a deadline, but an aborted `fetch` leaves a connect-pending
+ * socket that keeps Node's event loop alive until the OS gives up on the TCP
+ * handshake — measured at ~10.5s of silence after the work finished at 3s, on a
+ * host that blackholes packets. Exiting once the work is done and the output is
+ * flushed is what makes the deadline the user's actual wait.
+ *
+ * The drain matters: writes to a pipe are asynchronous, so exiting without it
+ * truncates output whenever otx is piped rather than attached to a terminal.
+ */
+async function exitWhenFlushed(code: number): Promise<never> {
+  const drain = (stream: NodeJS.WriteStream): Promise<void> =>
+    // A falsy write() means the buffer is full; anything already queued is
+    // delivered before "drain" fires.
+    stream.write("") ? Promise.resolve() : new Promise((resolve) => stream.once("drain", () => resolve()))
+  await Promise.all([drain(process.stdout), drain(process.stderr)])
+  process.exit(code)
+}
+
+program.parseAsync(process.argv).then(
+  // process.exitCode is typed to allow a string; only a number is meaningful here.
+  () => exitWhenFlushed(typeof process.exitCode === "number" ? process.exitCode : 0),
+  (err: unknown) => {
+    // @inquirer throws this when a prompt is interrupted (Ctrl-C); the user
+    // cancelling is not a failure.
+    if (err instanceof Error && err.message.includes("force closed")) {
+      return exitWhenFlushed(0)
+    }
+    console.error(err instanceof Error ? err.message : String(err))
+    return exitWhenFlushed(1)
+  },
+)
