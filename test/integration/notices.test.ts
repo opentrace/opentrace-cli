@@ -69,7 +69,8 @@ describe("key notices", () => {
     }
     if (!sb.seedKeychainKey(CLI_KEY)) return t.skip("no OS keychain backend on this machine")
     sb.stub.options.revoked.add(CLI_KEY)
-    const r = await sb.run(["add-mcp", sb.project, "-y", ...sb.base])
+    // The one child that must consult the real keychain, so it opts back in.
+    const r = await sb.run(["add-mcp", sb.project, "-y", ...sb.base], { env: { OTX_NO_KEYCHAIN: "" } })
     assert.match(r.stderr, CLI_REJECTED)
     assert.match(r.stderr, /otx login/)
   })

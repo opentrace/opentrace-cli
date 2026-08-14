@@ -31,6 +31,13 @@ const CLI_ENTRY = new URL("../../dist/index.js", import.meta.url).pathname
 /** Everything the OpenTrace API serves — as opposed to the registry lookup. */
 const API_PATH_PREFIXES = ["/mcp/v1", "/claude-code-usage/", "/ingest/", "/.well-known/", "/cli/"]
 
+/**
+ * Long enough for any real command against a local stub (the slowest legitimate
+ * path is a probe with a 3s deadline), short enough that a hang is a failing test
+ * rather than a stalled CI job.
+ */
+const CHILD_TIMEOUT_MS = 20_000
+
 /** Where Windows keeps roaming app data inside a sandbox. */
 const appDataFor = (home: string): string => path.join(home, "AppData", "Roaming")
 
@@ -119,6 +126,9 @@ export async function createSandbox(stubOptions: Partial<StubOptions> = {}): Pro
   const stub = await startStub(stubOptions)
   // Unique per sandbox, so parallel test files cannot collide in the keychain.
   const keychainService = `opentrace-cli-test-${process.pid}-${counter++}`
+  // Only true once a test has deliberately stored something, so cleanup does not
+  // reach for a backend that no test in this sandbox ever touched.
+  let usedKeychain = false
 
   const settingsPath = (scope: "user" | "project"): string =>
     scope === "user"
@@ -155,6 +165,12 @@ export async function createSandbox(stubOptions: Partial<StubOptions> = {}): Pro
         // the real user's roaming profile.
         APPDATA: appDataFor(home),
         OTX_KEYCHAIN_SERVICE: keychainService,
+        // Namespacing is not enough: the backend itself is machine-wide, and an
+        // unattended or locked one can block in a native call instead of
+        // failing — which is how a macOS run left two orphan node processes and
+        // hung for 25 minutes. Tests that specifically need a stored key clear
+        // this for their own child.
+        OTX_NO_KEYCHAIN: "1",
         OTX_REGISTRY_URL: stub.url,
         OTX_FORCE_NOTICES: "1",
         ...opts.env,
@@ -181,8 +197,26 @@ export async function createSandbox(stubOptions: Partial<StubOptions> = {}): Pro
           stderr += d
           output += d
         })
-        child.on("error", reject)
-        child.on("close", (code) => resolve({ code, stdout, stderr, output }))
+        // A child that never exits used to hang the whole suite with no clue
+        // which command was responsible. Killing it turns that into one failing
+        // test that names itself and shows what the command had printed so far.
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL")
+          reject(
+            new Error(
+              `otx ${args.join(" ")} did not exit within ${CHILD_TIMEOUT_MS}ms.\n` +
+                `--- output so far ---\n${output || "(none)"}`,
+            ),
+          )
+        }, CHILD_TIMEOUT_MS)
+        child.on("error", (err) => {
+          clearTimeout(timer)
+          reject(err)
+        })
+        child.on("close", (code) => {
+          clearTimeout(timer)
+          resolve({ code, stdout, stderr, output })
+        })
       })
     },
 
@@ -225,6 +259,7 @@ export async function createSandbox(stubOptions: Partial<StubOptions> = {}): Pro
         // child process under test, not for this one.
         const { Entry } = require("@napi-rs/keyring") as typeof import("@napi-rs/keyring")
         new Entry(keychainService, `${stub.url}/mcp/v1/`).setPassword(token)
+        usedKeychain = true
         return true
       } catch {
         return false
@@ -246,10 +281,10 @@ export async function createSandbox(stubOptions: Partial<StubOptions> = {}): Pro
 
     async cleanup() {
       await stub.close()
-      // Delete anything the run put in the real keychain under this sandbox's
-      // service name. Best-effort: on a headless box there is no Secret Service
-      // and nothing was ever stored.
-      try {
+      // Delete anything a test put in the real keychain under this sandbox's
+      // service name. Skipped entirely unless one did, so the common case never
+      // touches the backend at all.
+      if (usedKeychain) try {
         const { Entry } = (await import("@napi-rs/keyring")) as typeof import("@napi-rs/keyring")
         for (const account of [`${stub.url}/mcp/v1/`, stub.url]) {
           try {

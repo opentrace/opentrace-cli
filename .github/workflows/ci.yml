@@ -33,6 +33,9 @@ jobs:
           - os: ubuntu-latest
             node: 18
     name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    # A hung test must fail in minutes, not sit on a runner for GitHub's 6-hour
+    # default. The suite takes well under a minute; anything past this is stuck.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -54,6 +57,7 @@ jobs:
   # same path scripts/try-candidate.sh uses locally.
   package:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
