@@ -117,6 +117,13 @@ export interface TelemetryRemoval {
   removed: boolean
   /** A telemetry block is present but points somewhere else — left untouched. */
   foreign: boolean
+  /**
+   * Set when our own block was found but could not be removed — an unreadable or
+   * unwritable settings file. Distinguishes "failed" from "nothing to do", which
+   * otherwise look identical to the caller and leave telemetry running under a
+   * report of success.
+   */
+  error?: string
 }
 
 /**
@@ -143,8 +150,8 @@ export function removeTelemetryEnv(configPath: string): TelemetryRemoval {
     }
     writeJsonConfig(configPath, settings)
     return { removed: true, foreign: false }
-  } catch {
-    return { removed: false, foreign: false }
+  } catch (err) {
+    return { removed: false, foreign: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
 
@@ -398,6 +405,12 @@ export async function resolveTelemetryPlan(args: {
     console.log()
     if (existing?.state === "invalid") {
       want = await confirm({ message: "Provision a fresh usage key and start monitoring again?", default: true })
+    } else if (existing?.state === "unknown") {
+      // A block is there but carries no key we can verify — hand-edited, or
+      // written by something else. Saying so beats the first-run question, which
+      // would imply nothing is configured and then quietly overwrite it.
+      console.log(`Usage monitoring is already configured in ${existing.configPath}, but its key could not be verified.`)
+      want = await confirm({ message: "Set it up again with a fresh usage key?", default: true })
     } else if (existing?.state === "valid") {
       // Already working. Offered rather than assumed, because saying yes here
       // may replace the key (see explicitCliKey) rather than being a no-op.

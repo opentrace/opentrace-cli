@@ -219,10 +219,16 @@ export async function disconnect(targetPath: string, opts: DisconnectOptions): P
         })
       }
       if (go) {
+        // Tracked separately from `didSomething`, which is shared with the MCP
+        // and keychain components: gating the footer on that would announce an
+        // orphaned usage key because an MCP entry was removed, on a run where
+        // every telemetry block turned out to be someone else's.
+        let usageRemoved = false
         for (const configPath of present) {
           const r = removeTelemetryEnv(configPath)
           if (r.removed) {
             didSomething = true
+            usageRemoved = true
             console.log(`  ✓ removed usage monitoring from   ${configPath}`)
           } else if (r.foreign) {
             // Claude Code's OTEL settings are general-purpose. A block pointing
@@ -230,10 +236,14 @@ export async function disconnect(targetPath: string, opts: DisconnectOptions): P
             console.warn(
               `  ! left the telemetry block in ${configPath} alone — it does not point at OpenTrace.`,
             )
+          } else if (r.error) {
+            // The block is ours and still there. Silence here would read as
+            // "nothing to remove" while telemetry kept flowing.
+            console.error(`  ✗ could not remove usage monitoring from ${configPath} — ${r.error}`)
           }
         }
         // The key stays valid server-side; it is simply no longer configured.
-        if (didSomething) {
+        if (usageRemoved) {
           console.log("    (the usage key itself still exists — revoke it in the OpenTrace dashboard if you want it gone)")
         }
       }
