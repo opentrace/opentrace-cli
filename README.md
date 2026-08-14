@@ -284,6 +284,41 @@ The **Claude Code plugin supports both** a key and OAuth, and `otx install` can 
 
 Keys can expire or be revoked — if calls start returning `401`, reconnect with a fresh key.
 
+## Testing
+
+```bash
+npm test              # typecheck-free run: build, then unit + integration
+npm run test:unit     # pure logic only — fast, no child processes
+npm run lint          # typechecks src and test together
+```
+
+No test dependencies: `node:test` plus `tsc`. Tests compile alongside `src` into `build-test/`, so unit tests exercise the same TypeScript the package ships, while integration tests spawn the real `dist/index.js`.
+
+**Everything is hermetic.** Integration tests run against a local stub (`test/stub-server.ts`) standing in for the MCP mount, the usage-key endpoint, the OTLP ingest mount, the OAuth metadata document and the npm registry — all five, because the CLI derives every one from a single host. That lets tests assert on states you cannot summon against production: a revoked key, a server too old to provision usage keys, a newer release on npm.
+
+`HOME` accounts for nearly all isolation, since every config path derives from `os.homedir()`. Three things escape it and have env seams, set only by the harness:
+
+| Variable | Why it exists |
+|---|---|
+| `OTX_KEYCHAIN_SERVICE` | The OS keychain is machine-wide. Without a namespace, a test run would read, overwrite and delete your real entries. |
+| `OTX_REGISTRY_URL` | Redirects the update check off npm. |
+| `OTX_FORCE_NOTICES` | The banner is suppressed without a TTY, and a piped child process has none. Only ever loosens — an explicit `OTX_NO_NOTICES` still wins. |
+
+Two known gaps, stated rather than hidden: the **interactive prompts** need a pseudo-terminal, so prompt copy and defaults (including `otx login -y` keeping a valid key) are verified by hand rather than in CI; and the **browser sign-in** needs a real browser, so `otx login`'s OAuth round trip is never exercised automatically.
+
+### Trying an unreleased build on any machine
+
+`npm link` and `npm i -g` both overwrite the `otx` you actually use. This packs the candidate exactly as npm would publish it and installs *that* into a throwaway prefix instead:
+
+```bash
+eval "$(scripts/try-candidate.sh)"     # exports OTX and OTX_PREFIX
+SANDBOX=$(mktemp -d)
+HOME=$SANDBOX "$OTX" install --express # a real binary, none of your config
+rm -rf "$SANDBOX" "$OTX_PREFIX"
+```
+
+Same packaging, same bin shims, same `files` list as a release — and your global install is untouched. Note the keychain caveat above: a temp `HOME` does not cover it, so set `OTX_KEYCHAIN_SERVICE` too if the run might store a key.
+
 ## License
 
 Apache-2.0

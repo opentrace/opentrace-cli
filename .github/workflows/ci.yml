@@ -1,0 +1,80 @@
+# Typecheck and test every change before it can reach dev or main.
+#
+# The suite is hermetic: integration tests run the built CLI against a local stub
+# server with a temp HOME and a namespaced keychain, so nothing here talks to
+# api.opentrace.ai, to npm, or to the runner's own config. That is what makes it
+# safe to run on every push rather than only before a release.
+name: ci
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+  # Callable so publish.yml can require it before releasing.
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu is the gate; macOS catches the platform-specific config paths
+        # (Library/Application Support) that Linux never exercises.
+        os: [ubuntu-latest, macos-latest]
+        node: [22]
+        include:
+          # The floor in package.json engines. Worth one job: node:test and
+          # AbortSignal.timeout both behave differently far enough back.
+          - os: ubuntu-latest
+            node: 18
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    # A hung test must fail in minutes, not sit on a runner for GitHub's 6-hour
+    # default. The suite takes well under a minute; anything past this is stuck.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      # Typechecks src and test together, so a broken test file fails here
+      # rather than halfway through the run.
+      - run: npm run lint
+
+      - run: npm test
+
+  # A published tarball is what users actually install, so check that packaging
+  # produces a working binary — not just that the source compiles. This is the
+  # same path scripts/try-candidate.sh uses locally.
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Pack and install into a throwaway prefix
+        run: |
+          set -euo pipefail
+          npm run build
+          tarball=$(npm pack --silent)
+          prefix=$(mktemp -d)
+          npm install -g --prefix "$prefix" "./$tarball" --no-audit --no-fund
+          # Runs from a temp HOME so nothing lands in the runner's config.
+          sandbox=$(mktemp -d)
+          version=$(HOME="$sandbox" OTX_NO_NOTICES=1 "$prefix/bin/otx" --version)
+          echo "packaged otx reports $version"
+          test "$version" = "$(node -p "require('./package.json').version")"
+          HOME="$sandbox" OTX_NO_NOTICES=1 "$prefix/bin/otx" --help > /dev/null

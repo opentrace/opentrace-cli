@@ -1,0 +1,190 @@
+import assert from "node:assert/strict"
+import fs from "node:fs"
+import path from "node:path"
+import { afterEach, beforeEach, describe, it } from "node:test"
+import { createSandbox, hasTelemetry, telemetryToken, type Sandbox } from "../harness.js"
+import { otk } from "../stub-server.js"
+
+let sb: Sandbox
+const CLI_KEY = otk("cli")
+
+beforeEach(async () => {
+  sb = await createSandbox()
+})
+afterEach(() => sb.cleanup())
+
+describe("install --express", () => {
+  it("announces every decision before acting", async () => {
+    sb.seedPluginToken(CLI_KEY)
+    const r = await sb.run(["install", sb.project, "--express", "-y", ...sb.base])
+    assert.equal(r.code, 0)
+    // A mode that asks nothing must still say what it is about to do.
+    assert.match(r.stdout, /Express setup:/)
+    assert.match(r.stdout, /Tools:\s+Claude Code/)
+    assert.match(r.stdout, /Scope:\s+all projects/)
+    assert.match(r.stdout, /monitoring your Claude Code usage/)
+    assert.match(r.stdout, /Counts, not content/)
+  })
+
+  it("sets up every detected surface at user scope with monitoring on", async () => {
+    sb.seedPluginToken(CLI_KEY)
+    const r = await sb.run(["install", sb.project, "--express", "-y", ...sb.base])
+    assert.equal(r.code, 0)
+    const user = sb.readSettings("user")
+    assert.equal(user.enabledPlugins?.["opentrace@opentrace"], true)
+    assert.ok(user.extraKnownMarketplaces?.opentrace, "marketplace declared")
+    assert.ok(hasTelemetry(user), "telemetry block written at user scope")
+    assert.equal(telemetryToken(user), sb.stub.options.mintedUsageKey)
+    // Express means all projects: nothing project-scoped.
+    assert.equal(fs.existsSync(path.join(sb.project, ".claude", "settings.json")), false)
+  })
+
+  it("honours an explicit --no-track-usage instead of overriding it", async () => {
+    sb.seedPluginToken(CLI_KEY)
+    const r = await sb.run(["install", sb.project, "--express", "-y", "--no-track-usage", ...sb.base])
+    assert.equal(r.code, 0)
+    // Neither claimed in the plan…
+    assert.doesNotMatch(r.stdout, /monitoring your Claude Code usage/)
+    // …nor done.
+    assert.equal(hasTelemetry(sb.readSettings("user")), false)
+    assert.equal(
+      sb.stub.requests.some((q) => q.path === "/claude-code-usage/key"),
+      false,
+      "no usage key provisioned",
+    )
+  })
+
+  it("promises only the sign-in it can perform", async () => {
+    // No browser in a non-interactive run, so it must not claim one.
+    const r = await sb.run(["install", sb.project, "--express", "-y", ...sb.base])
+    assert.match(r.stdout, /Sign-in: any CLI key already on this machine/)
+    assert.doesNotMatch(r.stdout, /Sign-in: your browser/)
+  })
+
+  it("names the supplied key as the sign-in when one is given", async () => {
+    const r = await sb.run(["install", sb.project, "--express", "-y", "--api-key", CLI_KEY, ...sb.base])
+    assert.match(r.stdout, /Sign-in: the CLI key given on the command line/)
+  })
+
+  it("falls back to Custom when nothing is detected", async () => {
+    // A home with no tool directories at all.
+    fs.rmSync(path.join(sb.home, ".claude"), { recursive: true, force: true })
+    const r = await sb.run(["install", sb.project, "--express", "-y", ...sb.base])
+    assert.match(r.stdout, /No supported AI tools detected/)
+  })
+})
+
+describe("install (flag-driven)", () => {
+  it("writes a project .mcp.json for a non-plugin tool", async () => {
+    const r = await sb.run(["install", sb.project, "-y", "--cursor", ...sb.base])
+    assert.equal(r.code, 0)
+    const cursor = JSON.parse(
+      fs.readFileSync(path.join(sb.project, ".cursor", "mcp.json"), "utf8"),
+    ) as { mcpServers: Record<string, { url: string }> }
+    assert.equal(cursor.mcpServers.opentrace.url, `${sb.stub.url}/mcp/v1/`)
+  })
+
+  it("refuses --track-usage when Claude Code is not a target, with a note", async () => {
+    const r = await sb.run(["install", sb.project, "-y", "--cursor", "--track-usage", ...sb.base])
+    assert.equal(r.code, 0)
+    assert.match(r.output, /--track-usage has no effect here/)
+    assert.equal(hasTelemetry(sb.readSettings("user")), false)
+  })
+
+  it("rejects a malformed --api-key before touching anything", async () => {
+    const r = await sb.run(["install", sb.project, "-y", "--api-key", "otk_short", ...sb.base])
+    assert.equal(r.code, 1)
+    assert.match(r.stderr, /Invalid --api-key/)
+    assert.equal(sb.apiRequests().length, 0, "no API call made")
+  })
+
+  it("fails loudly when the supplied key is rejected, writing nothing", async () => {
+    const bad = otk("revoked")
+    sb.stub.options.revoked.add(bad)
+    const r = await sb.run(["install", sb.project, "-y", "--api-key", bad, ...sb.base])
+    assert.equal(r.code, 1)
+    assert.match(r.stderr, /Key rejected/)
+    assert.equal(fs.existsSync(path.join(sb.project, ".mcp.json")), false)
+  })
+
+  it("exits cleanly when the directory does not exist", async () => {
+    const r = await sb.run(["install", path.join(sb.home, "nope"), "-y", ...sb.base])
+    assert.equal(r.code, 1)
+    assert.match(r.stderr, /Directory not found/)
+  })
+})
+
+describe("install usage-key lifecycle", () => {
+  it("keeps a valid usage key when the CLI key came from local storage", async () => {
+    const usage = otk("existing-usage")
+    sb.seedPluginToken(CLI_KEY)
+    sb.seedTelemetry("user", usage)
+    const r = await sb.run(["install", sb.project, "-y", "--claude-code", "--track-usage", "-g", ...sb.base])
+    assert.equal(r.code, 0)
+    assert.match(r.stdout, /is still valid — keeping it/)
+    assert.equal(telemetryToken(sb.readSettings("user")), usage)
+    assert.equal(sb.stub.requests.some((q) => q.path === "/claude-code-usage/key"), false)
+  })
+
+  it("replaces a valid usage key when the run brought its own CLI key", async () => {
+    const usage = otk("existing-usage")
+    sb.seedTelemetry("user", usage)
+    const r = await sb.run([
+      "install", sb.project, "-y", "--claude-code", "--track-usage", "-g",
+      "--api-key", CLI_KEY, ...sb.base,
+    ])
+    assert.equal(r.code, 0)
+    assert.match(r.stdout, /replacing the usage key/)
+    assert.equal(telemetryToken(sb.readSettings("user")), sb.stub.options.mintedUsageKey)
+  })
+
+  it("replaces a rejected usage key", async () => {
+    const usage = otk("dead-usage")
+    sb.stub.options.revoked.add(usage)
+    sb.seedPluginToken(CLI_KEY)
+    sb.seedTelemetry("user", usage)
+    const r = await sb.run(["install", sb.project, "-y", "--claude-code", "--track-usage", "-g", ...sb.base])
+    assert.equal(r.code, 0)
+    assert.match(r.output, /rejected/)
+    assert.equal(telemetryToken(sb.readSettings("user")), sb.stub.options.mintedUsageKey)
+  })
+
+  it("reports a rejected usage key even when the run declines monitoring", async () => {
+    // The gap this closes: the check used to happen only when opting in, so a
+    // revoked key stayed silently revoked.
+    const usage = otk("dead-usage")
+    sb.stub.options.revoked.add(usage)
+    sb.seedPluginToken(CLI_KEY)
+    sb.seedTelemetry("user", usage)
+    const r = await sb.run(["install", sb.project, "-y", "--claude-code", "--no-track-usage", ...sb.base])
+    assert.equal(r.code, 0)
+    assert.match(r.output, /its key was rejected/)
+    assert.match(r.output, /otx disconnect --usage/)
+    // Declining means declining: the block is reported, not rewritten.
+    assert.equal(telemetryToken(sb.readSettings("user")), usage)
+  })
+
+  it("refreshes an existing block in place instead of writing a second one", async () => {
+    // Run defaults to project scope; the block lives at user scope. One block.
+    const usage = otk("existing-usage")
+    sb.seedPluginToken(CLI_KEY)
+    sb.seedTelemetry("user", usage)
+    const r = await sb.run(["install", sb.project, "-y", "--claude-code", "--track-usage", ...sb.base])
+    assert.equal(r.code, 0)
+    assert.equal(hasTelemetry(sb.readSettings("user")), true)
+    assert.equal(hasTelemetry(sb.readSettings("project")), false, "no duplicate block")
+  })
+
+  it("leaves the existing block alone when provisioning fails", async () => {
+    const usage = otk("existing-usage")
+    sb.stub.options.revoked.add(usage)
+    sb.stub.options.usageKeyUnsupported = true // server too old
+    sb.seedPluginToken(CLI_KEY)
+    sb.seedTelemetry("user", usage)
+    const r = await sb.run(["install", sb.project, "-y", "--claude-code", "--track-usage", "-g", ...sb.base])
+    assert.equal(r.code, 0)
+    assert.match(r.output, /does not support usage-key provisioning yet/)
+    // Never destroy what you cannot replace.
+    assert.equal(telemetryToken(sb.readSettings("user")), usage)
+  })
+})

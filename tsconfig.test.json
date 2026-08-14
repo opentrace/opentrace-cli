@@ -1,0 +1,17 @@
+// Tests compile alongside src into a throwaway directory, so unit tests import
+// the same TypeScript the package ships rather than a second copy. Integration
+// tests spawn dist/index.js — the real entry point — so `npm test` builds both.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "build-test",
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": true,
+    // Tests read JSON fixtures out of settings files as `any`; the strictness
+    // that pays off in src just adds casts here.
+    "noImplicitAny": false
+  },
+  "include": ["src", "test"]
+}

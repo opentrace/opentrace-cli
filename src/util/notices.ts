@@ -64,7 +64,12 @@ function envFlag(name: string): boolean {
 }
 
 function suppressed(): boolean {
+  // An explicit opt-out always wins, including over the force below.
   if (envFlag("OTX_NO_NOTICES") || envFlag("NO_UPDATE_NOTIFIER") || envFlag("CI")) return true
+  // The TTY rule is what makes the banner untestable without a pseudo-terminal,
+  // so it alone can be forced off. Only ever loosens: it cannot make a banner
+  // appear for someone who opted out above.
+  if (envFlag("OTX_FORCE_NOTICES")) return false
   // Nobody is reading. Also keeps the banner out of captured output.
   return !process.stderr.isTTY
 }
@@ -78,9 +83,20 @@ function tildify(filePath: string): string {
 // Update check
 // ---------------------------------------------------------------------------
 
+/**
+ * Overridable so tests can serve version metadata locally instead of reaching
+ * npm. Read per call rather than once at module load: a top-level const freezes
+ * whatever the environment held at first import, which is invisible in the CLI
+ * (one process, one value) but silently defeats any in-process test that sets the
+ * variable after importing this module.
+ */
+function registryUrl(): string {
+  return (process.env.OTX_REGISTRY_URL ?? "https://registry.npmjs.org").replace(/\/$/, "")
+}
+
 async function fetchLatestVersion(): Promise<string | undefined> {
   // A scoped name is one path segment to the registry, so it is encoded as one.
-  const url = `https://registry.npmjs.org/${encodeURIComponent(packageName())}/latest`
+  const url = `${registryUrl()}/${encodeURIComponent(packageName())}/latest`
   try {
     const res = await fetch(url, {
       headers: { Accept: "application/json" },
