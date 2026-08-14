@@ -29,9 +29,9 @@
     "clean": "rm -rf dist build-test",
     "prepublishOnly": "npm run clean && npm run build",
     "build:test": "tsc -p tsconfig.test.json",
-    "test": "npm run build && npm run build:test && node --test build-test/test/unit/*.test.js build-test/test/integration/*.test.js",
-    "test:unit": "npm run build:test && node --test build-test/test/unit/*.test.js",
-    "test:integration": "npm run build && npm run build:test && node --test build-test/test/integration/*.test.js"
+    "test": "npm run build && npm run build:test && node scripts/run-tests.mjs",
+    "test:unit": "npm run build:test && node scripts/run-tests.mjs unit",
+    "test:integration": "npm run build && npm run build:test && node scripts/run-tests.mjs integration"
   },
   "repository": {
     "type": "git",
