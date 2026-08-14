@@ -162,7 +162,7 @@ otx disconnect --usage                     # just stop usage monitoring
 | `-g, --global` | Also check user-level editor configs |
 | `-y, --yes` | Skip prompts |
 
-It removes the OpenTrace entry from each client config it finds, drops the plugin's `extraKnownMarketplaces`/`enabledPlugins` declaration (run `claude plugin uninstall opentrace@opentrace` to also clear the installed plugin cache), deletes the stored key from the OS keychain — for the API-key flow it auto-derives the keychain host from the config it removed, so `--all` needs no `--url` — and stops usage monitoring.
+It removes the OpenTrace entry from each client config it finds, drops the plugin's `extraKnownMarketplaces`/`enabledPlugins` declaration **and takes the plugin out of Claude Code's own install records** so it stops appearing in `/plugin`, deletes the stored key from the OS keychain — for the API-key flow it auto-derives the keychain host from the config it removed, so `--all` needs no `--url` — and stops usage monitoring.
 
 Two things worth knowing about `--usage`:
 
