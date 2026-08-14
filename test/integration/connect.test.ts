@@ -124,6 +124,61 @@ describe("connect otk_… (key flow)", () => {
   })
 })
 
+describe("connect otk_… without a terminal", () => {
+  // The dashboard hands this command to people setting up a server, CI runner or
+  // SSH box. Interactively it now routes into the install flow; without a
+  // terminal it must stay exactly the narrow single-client attach it has always
+  // been, or that documented usage changes under everyone's automation.
+  it("attaches one client and does not run the installer", async () => {
+    // Cursor would be detected, so the installer would configure it too.
+    fs.mkdirSync(path.join(sb.home, ".cursor"), { recursive: true })
+    const r = await sb.run(["connect", CLI_KEY, ...url(), "--no-track-usage"])
+    assert.equal(r.code, 0)
+    assert.match(r.stdout, /Connected Claude Code \(plugin\)/)
+    // The installer's fingerprints, absent: no tool list, no Express plan, and
+    // nothing written for a second tool.
+    assert.doesNotMatch(r.output, /Express setup:/)
+    assert.equal(fs.existsSync(path.join(sb.home, ".cursor", "mcp.json")), false)
+    assert.equal(fs.existsSync(path.join(sb.project, ".cursor", "mcp.json")), false)
+  })
+
+  it("routes into the onboarding flow anyway when --express asks for it", async () => {
+    // A flag the user typed is never silently dropped — not even by the guard
+    // that keeps automation on the narrow path.
+    fs.mkdirSync(path.join(sb.home, ".cursor"), { recursive: true })
+    const r = await sb.run(["connect", CLI_KEY, ...url(), "--express", "--no-track-usage"])
+    assert.equal(r.code, 0)
+    assert.match(r.stdout, /Express setup:/)
+    assert.match(r.stdout, /Cursor/)
+  })
+
+  it("says so rather than silently ignoring per-tool flags", async () => {
+    // The trap: --cursor was dropped in silence AND the default client was
+    // configured instead, so the user got Claude Code having asked for Cursor.
+    const r = await sb.run(["connect", CLI_KEY, ...url(), "--cursor", "-y", "--no-track-usage"])
+    assert.equal(r.code, 0)
+    assert.match(r.output, /Ignoring Cursor/)
+    assert.match(r.output, /--client/)
+  })
+
+  it("says so rather than silently ignoring --express alongside --client", async () => {
+    const r = await sb.run([
+      "connect", CLI_KEY, ...url(), "--client", "claude-code", "--express", "--no-track-usage",
+    ])
+    assert.equal(r.code, 0)
+    assert.match(r.output, /--express has no effect with --client/)
+    assert.doesNotMatch(r.stdout, /Express setup:/)
+  })
+
+  it("still honours -y the same way", async () => {
+    fs.mkdirSync(path.join(sb.home, ".cursor"), { recursive: true })
+    const r = await sb.run(["connect", CLI_KEY, ...url(), "-y", "--no-track-usage"])
+    assert.equal(r.code, 0)
+    assert.match(r.stdout, /Connected Claude Code \(plugin\)/)
+    assert.equal(fs.existsSync(path.join(sb.home, ".cursor", "mcp.json")), false)
+  })
+})
+
 describe("connect <path> (editor onboarding)", () => {
   it("routes a path to the install flow rather than the key flow", async () => {
     const r = await sb.run(["connect", sb.project, "-y", "--cursor", ...sb.base])

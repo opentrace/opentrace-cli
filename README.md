@@ -21,7 +21,7 @@ Requires Node.js 18 or newer.
 otx login
 ```
 
-`otx login` opens your browser, signs you in to OpenTrace, and does the rest: it mints a **CLI key** for this machine, wires up your client (Claude Code by default), and offers to monitor your Claude Code usage. Nothing to paste, no dashboard visit. Then restart your tool — in Claude Code, accept the plugin prompt and run `/reload-plugins`.
+`otx login` opens your browser, signs you in to OpenTrace, and does the rest: it mints a **CLI key** for this machine, then runs the same setup as `otx install` with that key — **Express or Custom**, tool detection, scope, and usage monitoring. Nothing to paste, no dashboard visit. Then restart your tools — in Claude Code, accept the plugin prompt and run `/reload-plugins`.
 
 Browser sign-in needs a local browser and a terminal. On a server, in CI, or over SSH, use a key instead:
 
@@ -44,15 +44,20 @@ otx login --no-browser           # print the URL instead of launching a browser
 otx login --url https://api.example.opentrace.ai
 ```
 
-It runs an OAuth loopback flow (dynamic client registration + PKCE) against your OpenTrace host, exchanges the sign-in for a `cli`-scoped key, and from there behaves exactly like `otx connect otk_…`: the key is validated with an MCP handshake, attached to the client, and reused for the optional usage-monitoring step. The sign-in token itself is discarded — the CLI keeps only the minted key.
+It runs an OAuth loopback flow (dynamic client registration + PKCE) against your OpenTrace host and exchanges the sign-in for a `cli`-scoped key. The sign-in token itself is discarded — the CLI keeps only the minted key.
 
-**Options:** `--client <id>`, `--base-url <url>`, `--url <url>`, `--no-browser`, `--track-usage` / `--no-track-usage`, `-g, --global`, `-y, --yes`.
+What happens next is the same whether the key was just minted or was already on this machine — and depends only on whether you named a client:
+
+- **No `--client`** (the dashboard's one-liner): the key goes into the full [`otx install` flow](#otx-connect-path--otx-install-path) — Express or Custom, tool detection, scope, usage monitoring. Signing in decides *how* you authenticate, not how little gets set up. The scope question leans towards **All projects** here, since signing in onboards a machine rather than a project.
+- **`--client <id>`**: an explicit narrow instruction, so it behaves exactly like `otx connect otk_…` and configures that one client. This is also the only way to reach **Claude Desktop**, which the key flow supports but `install` does not.
+
+**Options:** `--client <id>`, `--base-url <url>`, `--url <url>`, `--no-browser`, `--express`, `--track-usage` / `--no-track-usage`, `-g, --global`, `-y, --yes`.
 
 Notes:
 
 - **Needs a TTY and a local browser.** In automation use `otx connect otk_…` — `otx login` refuses to run non-interactively rather than hanging.
 - Over SSH or on a headless box the redirect can't reach you (it lands on `127.0.0.1` of the machine running otx); the CLI says so and points you at the key flow.
-- If this machine already holds a valid key, it asks before signing in again rather than minting a duplicate.
+- If this machine already holds a valid key, it asks before signing in again rather than minting a duplicate; `-y` takes that question's default and keeps it. Either way it **goes on to set your tools up with that key** — declining a new key is not declining setup.
 - Self-hosted deployments without OAuth dynamic registration enabled report that browser sign-in isn't available — paste a key instead.
 
 ### `otx connect otk_<key> [--url <host>] [--client <id>]`
@@ -70,6 +75,10 @@ otx connect otk_… --client cursor
 # A non-default API host
 otx connect otk_… --url https://api.example.opentrace.ai
 ```
+
+Run it in a terminal with no `--client` and it routes into the full [`otx install` flow](#otx-connect-path--otx-install-path) — Express or Custom, tool detection, scope — the same as `otx login`. `--express` takes that route too, terminal or not, since it asks for it outright. **Without a terminal (CI, a pipe), with `-y`, or with `--client`, it stays the narrow single-client attach described below**, so the server/CI usage the dashboard documents is unchanged.
+
+On that narrow path only `--client` is understood. Per-tool flags and `--express` are reported as ignored rather than dropped in silence — `--cursor` used to leave you with Claude Code configured instead. To set up several tools with a pasted key, use `otx install --api-key otk_…` with per-tool flags.
 
 **Options:**
 
