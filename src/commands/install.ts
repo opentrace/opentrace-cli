@@ -501,6 +501,10 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     // silently overridden by the mode's default.
     trackUsage: opts.trackUsage ?? (express ? true : undefined),
     cliToken: key?.token,
+    // A key from the keychain or the plugin token file is the one this machine
+    // was already using, so the usage key on file belongs to it. A key that
+    // arrived any other way may be a different account.
+    explicitCliKey: key !== undefined && key.source !== "keychain" && key.source !== "plugin",
     targetsClaudeCode: targets.some((i) => i.id === "claude-code"),
   })
 

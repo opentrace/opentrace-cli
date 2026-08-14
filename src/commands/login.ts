@@ -17,6 +17,7 @@ interface LoginOptions {
   /** Explicit --track-usage / --no-track-usage; undefined = not stated (prompt or skip). */
   trackUsage?: boolean
   global?: boolean
+  /** Skip confirmations by taking their defaults — which includes keeping a still-valid CLI key. */
   yes?: boolean
 }
 
@@ -37,28 +38,38 @@ export async function login(opts: LoginOptions): Promise<void> {
   const baseUrl = toBaseUrl(endpoint)
   const mcpUrl = normalizeMcpUrl(endpoint)
 
-  // Every sign-in mints a fresh server-side key, so a machine that already
-  // holds a working one is asked before another is minted.
-  if (!opts.yes) {
-    // The plugin token file is not endpoint-scoped, so it only describes this
-    // endpoint when this endpoint is the default one — a run pointed at another
-    // deployment must not probe (or offer to keep) a key minted elsewhere.
-    const stored = findStoredKey(mcpUrl, { includePluginToken: baseUrl === DEFAULT_BASE_URL })?.token
-    if (stored) {
-      console.log(`Checking the CLI key already on this machine (${maskToken(stored)}) …`)
-      const probe = await probeMcp(mcpUrl, stored)
-      if (probe.ok || probe.kind === "auth") {
-        recordKeyVerdict(cliKeyId(mcpUrl), stored, probe.ok ? "valid" : "rejected")
-      }
-      if (probe.ok) {
-        const again = await confirm({
-          message: `This machine already has a valid CLI key for ${baseUrl}. Sign in and mint a new one anyway?`,
-          default: false,
-        })
-        if (!again) {
-          console.log("Keeping the existing key — attach it to a client with `otx install` or `otx connect`.")
-          return
+  // Every sign-in mints a fresh server-side key, so a machine that already holds
+  // a working one keeps it.
+  //
+  // This check runs under -y too. It used to be skipped there, which made -y the
+  // one way to rotate a key that was perfectly good: the question below defaults
+  // to "keep", and -y means take the default, so skipping the question inverted
+  // the very answer it was meant to assume.
+  //
+  // The plugin token file is not endpoint-scoped, so it only describes this
+  // endpoint when this endpoint is the default one — a run pointed at another
+  // deployment must not probe (or offer to keep) a key minted elsewhere.
+  const stored = findStoredKey(mcpUrl, { includePluginToken: baseUrl === DEFAULT_BASE_URL })?.token
+  if (stored) {
+    console.log(`Checking the CLI key already on this machine (${maskToken(stored)}) …`)
+    const probe = await probeMcp(mcpUrl, stored)
+    if (probe.ok || probe.kind === "auth") {
+      recordKeyVerdict(cliKeyId(mcpUrl), stored, probe.ok ? "valid" : "rejected")
+    }
+    if (probe.ok) {
+      const again = opts.yes
+        ? false // the default answer, taken rather than asked
+        : await confirm({
+            message: `This machine already has a valid CLI key for ${baseUrl}. Sign in and mint a new one anyway?`,
+            default: false,
+          })
+      if (!again) {
+        console.log("Keeping the existing key — attach it to a client with `otx install` or `otx connect`.")
+        // Said only where it explains the absence of a question.
+        if (opts.yes) {
+          console.log("(-y keeps a valid key; re-run without -y to be asked about minting a fresh one.)")
         }
+        return
       }
     }
   }

@@ -5,12 +5,14 @@ import { KEY_CLIENTS } from "../key-clients/index.js"
 import { SERVER_KEY, DEFAULT_BASE_URL, normalizeMcpUrl } from "../util/constants.js"
 import { hasJsonEntry } from "../util/json-config.js"
 import { deleteToken, getToken, KeychainUnavailableError } from "../util/keychain.js"
+import { claudeSettingsPath, hasTelemetryEnv, removeTelemetryEnv } from "../util/telemetry.js"
 import claudeCode from "../integrations/claude-code.js"
 
 interface DisconnectOptions {
   mcp?: boolean
   plugin?: boolean
   keychain?: boolean
+  usage?: boolean
   all?: boolean
   client?: string
   global?: boolean
@@ -18,7 +20,10 @@ interface DisconnectOptions {
   yes?: boolean
 }
 
-type Component = "mcp" | "plugin" | "keychain"
+type Component = "mcp" | "plugin" | "keychain" | "usage"
+
+/** Every component, for `--all` and for the non-interactive default. */
+const ALL_COMPONENTS: Component[] = ["mcp", "plugin", "keychain", "usage"]
 
 /** A single removable OpenTrace MCP server entry (from a key-client or an editor integration). */
 interface McpTarget {
@@ -78,23 +83,25 @@ async function resolveComponents(opts: DisconnectOptions): Promise<Component[]> 
   if (opts.mcp) explicit.push("mcp")
   if (opts.plugin) explicit.push("plugin")
   if (opts.keychain) explicit.push("keychain")
+  if (opts.usage) explicit.push("usage")
   if (explicit.length > 0) return explicit
-  if (opts.all) return ["mcp", "plugin", "keychain"]
+  if (opts.all) return ALL_COMPONENTS
 
-  if (!process.stdin.isTTY || opts.yes) return ["mcp", "plugin", "keychain"]
+  if (!process.stdin.isTTY || opts.yes) return ALL_COMPONENTS
 
   // Single-select with an explicit "everything" option — a pre-checked multi-select
-  // reads as "highlight to pick", so users submit all three by accident.
+  // reads as "highlight to pick", so users submit everything by accident.
   const choice = await select<Component | "all">({
     message: "What should otx disconnect?",
     choices: [
-      { name: "Everything (MCP entries + plugin + keychain key)", value: "all" },
+      { name: "Everything (MCP entries + plugin + keychain key + usage monitoring)", value: "all" },
       { name: "MCP server entries only", value: "mcp" },
       { name: "Claude Code plugin only", value: "plugin" },
       { name: "API key in the OS keychain only", value: "keychain" },
+      { name: "Usage monitoring only (the OTEL env block)", value: "usage" },
     ],
   })
-  return choice === "all" ? ["mcp", "plugin", "keychain"] : [choice]
+  return choice === "all" ? ALL_COMPONENTS : [choice]
 }
 
 export async function disconnect(targetPath: string, opts: DisconnectOptions): Promise<void> {
@@ -185,6 +192,50 @@ export async function disconnect(targetPath: string, opts: DisconnectOptions): P
         console.warn(`Keychain unavailable: ${err.message}`)
       } else {
         throw err
+      }
+    }
+  }
+
+  // ---- Usage monitoring ----
+  // Both scopes, unconditionally: this is the one component whose leftovers keep
+  // *doing* something. An MCP entry the tool can no longer authenticate is
+  // inert, but a live telemetry block goes on exporting to OpenTrace after a
+  // disconnect the user believes was total — so `--global` does not gate it.
+  if (components.includes("usage")) {
+    const paths = [
+      claudeSettingsPath(dir, { global: false }),
+      claudeSettingsPath(dir, { global: true }),
+    ].filter((p, i, all) => all.indexOf(p) === i)
+
+    const present = paths.filter((p) => hasTelemetryEnv(p))
+    if (present.length === 0) {
+      console.log("No usage monitoring configured.")
+    } else {
+      let go = true
+      if (!opts.yes && process.stdin.isTTY) {
+        go = await confirm({
+          message: `Stop usage monitoring and remove the OTEL env block from ${present.length} settings file(s)?`,
+          default: true,
+        })
+      }
+      if (go) {
+        for (const configPath of present) {
+          const r = removeTelemetryEnv(configPath)
+          if (r.removed) {
+            didSomething = true
+            console.log(`  ✓ removed usage monitoring from   ${configPath}`)
+          } else if (r.foreign) {
+            // Claude Code's OTEL settings are general-purpose. A block pointing
+            // somewhere other than OpenTrace belongs to the user, not to us.
+            console.warn(
+              `  ! left the telemetry block in ${configPath} alone — it does not point at OpenTrace.`,
+            )
+          }
+        }
+        // The key stays valid server-side; it is simply no longer configured.
+        if (didSomething) {
+          console.log("    (the usage key itself still exists — revoke it in the OpenTrace dashboard if you want it gone)")
+        }
       }
     }
   }
