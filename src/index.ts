@@ -5,9 +5,10 @@ import { install } from "./commands/install.js"
 import { connectWithKey } from "./commands/connect.js"
 import { login } from "./commands/login.js"
 import { disconnect } from "./commands/disconnect.js"
-import { ALL_INTEGRATIONS } from "./util/detect.js"
+import { ALL_INTEGRATIONS, integrationsFromFlags } from "./util/detect.js"
 import { DEFAULT_BASE_URL, toBaseUrl, buildMcpUrl } from "./util/constants.js"
 import { looksLikeToken } from "./util/token.js"
+import { isInteractive } from "./util/tty.js"
 import { packageVersion } from "./util/version.js"
 import { printNotices } from "./util/notices.js"
 
@@ -117,6 +118,49 @@ connectCmd
       if (opts.apiKey && opts.apiKey !== tokenOrPath) {
         console.warn("Both a key argument and --api-key were given — using the key argument, ignoring --api-key.")
       }
+
+      // A person pasting the dashboard's receipt command gets the same onboarding
+      // `login` gives them: Express/Custom, tool detection, scope.
+      //
+      // Reached when there is someone there to answer, or when --express asks for
+      // that flow outright — a flag the user typed is never silently dropped.
+      // NOT reached with --client, or on a server/CI/SSH run with no terminal,
+      // where the narrow single-client attach at user scope is the documented
+      // behaviour and must not change under anyone's automation.
+      const wantsOnboarding =
+        !opts.client && (opts.express === true || (!opts.yes && isInteractive()))
+      if (wantsOnboarding) {
+        const { baseUrl, pluginUrl } = resolveEndpoint(opts)
+        await install(process.cwd(), {
+          baseUrl,
+          pluginUrl,
+          apiKey: tokenOrPath,
+          express: opts.express,
+          trackUsage: explicitTrackUsage(connectCmd),
+          global: opts.global,
+          // Like `login`: a key names a machine, not a project.
+          preferGlobal: true,
+          toolOpts: opts as Record<string, unknown>,
+        })
+        return
+      }
+
+      // Past here it is the single-client attach, which understands --client and
+      // nothing else. Anything else the user asked for would be dropped in
+      // silence — and worse than silence: per-tool flags would leave them with
+      // the default client configured instead of the one they named.
+      if (opts.express) {
+        console.warn("--express has no effect with --client — that names a single client to attach.")
+      }
+      const ignored = integrationsFromFlags(opts as Record<string, unknown>)
+      if (ignored.length > 0) {
+        const labels = ignored.map((i) => i.label).join(", ")
+        console.warn(
+          `Ignoring ${labels}: a key argument attaches one client, chosen with --client. ` +
+            `Use \`otx install --api-key ${"otk_…"}\` with per-tool flags to set up several tools.`,
+        )
+      }
+
       await connectWithKey(tokenOrPath, {
         url: opts.url,
         client: opts.client,
@@ -139,26 +183,31 @@ connectCmd
     })
   })
 
-// The browser front end to `connect otk_…`: OAuth sign-in mints the CLI key,
-// then the same probe/attach/usage-monitoring machinery takes over. Automation
-// keeps using `connect otk_…` / `install --api-key` — login refuses non-TTY runs.
+// The browser front end to onboarding: OAuth sign-in mints the CLI key, then the
+// `install` flow takes over with it — so the dashboard's recommended one-liner
+// gets Express/Custom, tool detection and scope, not just one client. `--client`
+// narrows it to the single-client key flow instead (the only route to Claude
+// Desktop). Automation keeps using `connect otk_…` / `install --api-key` — login
+// refuses non-TTY runs.
 const loginCmd = program
   .command("login")
-  .description("Sign in to OpenTrace in your browser and connect this machine (mints a CLI key)")
+  .description("Sign in to OpenTrace in your browser, then set up your tools (mints a CLI key)")
   .option("--base-url <url>", "OpenTrace API base URL", DEFAULT_BASE_URL)
   .option("--url <url>", "OpenTrace MCP endpoint or host (overrides --base-url)")
   .option("--client <id>", "Target client for the minted key: claude-code | claude-desktop | cursor")
   .option("--no-browser", "Don't launch a browser — print the sign-in URL to open manually")
+  .option("--express", "Skip the Express/Custom question: every detected tool, all projects, usage monitoring on")
   .option("--track-usage", "Monitor your Claude Code usage in OpenTrace without asking")
   .option("--no-track-usage", "Skip Claude Code usage monitoring without asking")
   .option("-g, --global", "User-level scope for the usage-monitoring settings file")
-  .option("-y, --yes", "Skip confirmation prompts (a TTY and browser are still required)")
+  .option("-y, --yes", "Take the default answer to every prompt — including keeping a CLI key that is still valid (a TTY and browser are still required)")
 loginCmd.action(async (opts) => {
   await login({
     url: opts.url,
     baseUrl: opts.baseUrl,
     client: opts.client,
     browser: opts.browser,
+    express: opts.express,
     trackUsage: explicitTrackUsage(loginCmd),
     global: opts.global,
     yes: opts.yes,
@@ -171,7 +220,8 @@ program
   .option("--mcp", "Remove OpenTrace MCP server entries")
   .option("--plugin", "Remove the Claude Code plugin declaration")
   .option("--keychain", "Delete the stored API key from the OS keychain")
-  .option("--all", "Remove everything (MCP + plugin + keychain)")
+  .option("--usage", "Stop usage monitoring: remove the OTEL env block from Claude Code settings (both scopes)")
+  .option("--all", "Remove everything (MCP + plugin + keychain + usage monitoring)")
   .option("--client <id>", "Restrict MCP removal to one client (claude-code | claude-desktop | cursor | …)")
   .option("--url <url>", "Keychain endpoint whose key to delete (for a non-default host)")
   .option("-g, --global", "Also check user-level editor configs")
@@ -181,6 +231,7 @@ program
       mcp: opts.mcp,
       plugin: opts.plugin,
       keychain: opts.keychain,
+      usage: opts.usage,
       all: opts.all,
       client: opts.client,
       global: opts.global,

@@ -21,7 +21,7 @@ Requires Node.js 18 or newer.
 otx login
 ```
 
-`otx login` opens your browser, signs you in to OpenTrace, and does the rest: it mints a **CLI key** for this machine, wires up your client (Claude Code by default), and offers to monitor your Claude Code usage. Nothing to paste, no dashboard visit. Then restart your tool — in Claude Code, accept the plugin prompt and run `/reload-plugins`.
+`otx login` opens your browser, signs you in to OpenTrace, and does the rest: it mints a **CLI key** for this machine, then runs the same setup as `otx install` with that key — **Express or Custom**, tool detection, scope, and usage monitoring. Nothing to paste, no dashboard visit. Then restart your tools — in Claude Code, accept the plugin prompt and run `/reload-plugins`.
 
 Browser sign-in needs a local browser and a terminal. On a server, in CI, or over SSH, use a key instead:
 
@@ -44,15 +44,20 @@ otx login --no-browser           # print the URL instead of launching a browser
 otx login --url https://api.example.opentrace.ai
 ```
 
-It runs an OAuth loopback flow (dynamic client registration + PKCE) against your OpenTrace host, exchanges the sign-in for a `cli`-scoped key, and from there behaves exactly like `otx connect otk_…`: the key is validated with an MCP handshake, attached to the client, and reused for the optional usage-monitoring step. The sign-in token itself is discarded — the CLI keeps only the minted key.
+It runs an OAuth loopback flow (dynamic client registration + PKCE) against your OpenTrace host and exchanges the sign-in for a `cli`-scoped key. The sign-in token itself is discarded — the CLI keeps only the minted key.
 
-**Options:** `--client <id>`, `--base-url <url>`, `--url <url>`, `--no-browser`, `--track-usage` / `--no-track-usage`, `-g, --global`, `-y, --yes`.
+What happens next is the same whether the key was just minted or was already on this machine — and depends only on whether you named a client:
+
+- **No `--client`** (the dashboard's one-liner): the key goes into the full [`otx install` flow](#otx-connect-path--otx-install-path) — Express or Custom, tool detection, scope, usage monitoring. Signing in decides *how* you authenticate, not how little gets set up. The scope question leans towards **All projects** here, since signing in onboards a machine rather than a project.
+- **`--client <id>`**: an explicit narrow instruction, so it behaves exactly like `otx connect otk_…` and configures that one client. This is also the only way to reach **Claude Desktop**, which the key flow supports but `install` does not.
+
+**Options:** `--client <id>`, `--base-url <url>`, `--url <url>`, `--no-browser`, `--express`, `--track-usage` / `--no-track-usage`, `-g, --global`, `-y, --yes`.
 
 Notes:
 
 - **Needs a TTY and a local browser.** In automation use `otx connect otk_…` — `otx login` refuses to run non-interactively rather than hanging.
 - Over SSH or on a headless box the redirect can't reach you (it lands on `127.0.0.1` of the machine running otx); the CLI says so and points you at the key flow.
-- If this machine already holds a valid key, it asks before signing in again rather than minting a duplicate.
+- If this machine already holds a valid key, it asks before signing in again rather than minting a duplicate; `-y` takes that question's default and keeps it. Either way it **goes on to set your tools up with that key** — declining a new key is not declining setup.
 - Self-hosted deployments without OAuth dynamic registration enabled report that browser sign-in isn't available — paste a key instead.
 
 ### `otx connect otk_<key> [--url <host>] [--client <id>]`
@@ -70,6 +75,10 @@ otx connect otk_… --client cursor
 # A non-default API host
 otx connect otk_… --url https://api.example.opentrace.ai
 ```
+
+Run it in a terminal with no `--client` and it routes into the full [`otx install` flow](#otx-connect-path--otx-install-path) — Express or Custom, tool detection, scope — the same as `otx login`. `--express` takes that route too, terminal or not, since it asks for it outright. **Without a terminal (CI, a pipe), with `-y`, or with `--client`, it stays the narrow single-client attach described below**, so the server/CI usage the dashboard documents is unchanged.
+
+On that narrow path only `--client` is understood. Per-tool flags and `--express` are reported as ignored rather than dropped in silence — `--cursor` used to leave you with Claude Code configured instead. To set up several tools with a pasted key, use `otx install --api-key otk_…` with per-tool flags.
 
 **Options:**
 
@@ -134,25 +143,33 @@ Adds only the OpenTrace MCP server to a Claude Code project's `.mcp.json` (no pl
 Reverses what the CLI set up. Choose components; with none selected it prompts interactively (or removes everything under `-y`).
 
 ```bash
-otx disconnect --all                      # MCP entries + plugin + keychain key
+otx disconnect --all                      # MCP entries + plugin + keychain key + usage monitoring
 otx disconnect --mcp                       # just the MCP server entries
 otx disconnect --mcp --client cursor       # only Cursor's MCP entry
 otx disconnect --plugin                    # just the Claude Code plugin declaration
 otx disconnect --keychain --url https://…  # just the stored key for a host
+otx disconnect --usage                     # just stop usage monitoring
 ```
 
 **Options:**
 
 | Flag | Description |
 |------|-------------|
-| `--mcp` / `--plugin` / `--keychain` | Pick components (combine freely) |
-| `--all` | All three |
+| `--mcp` / `--plugin` / `--keychain` / `--usage` | Pick components (combine freely) |
+| `--all` | All four |
 | `--client <id>` | Restrict MCP removal to one client (`claude-code`, `claude-desktop`, `cursor`, …) |
 | `--url <url>` | Keychain endpoint whose key to delete (for a non-default host) |
 | `-g, --global` | Also check user-level editor configs |
 | `-y, --yes` | Skip prompts |
 
-It removes the OpenTrace entry from each client config it finds, drops the plugin's `extraKnownMarketplaces`/`enabledPlugins` declaration (run `claude plugin uninstall opentrace@opentrace` to also clear the installed plugin cache), and deletes the stored key from the OS keychain — for the API-key flow it auto-derives the keychain host from the config it removed, so `--all` needs no `--url`.
+It removes the OpenTrace entry from each client config it finds, drops the plugin's `extraKnownMarketplaces`/`enabledPlugins` declaration (run `claude plugin uninstall opentrace@opentrace` to also clear the installed plugin cache), deletes the stored key from the OS keychain — for the API-key flow it auto-derives the keychain host from the config it removed, so `--all` needs no `--url` — and stops usage monitoring.
+
+Two things worth knowing about `--usage`:
+
+- **It always covers both scopes**, regardless of `-g`. This is the one component whose leftovers keep *doing* something: an MCP entry the tool can no longer authenticate is inert, but a live telemetry block goes on exporting after a disconnect you believed was total.
+- **It only deletes the keys otx writes**, and only when the block is ours — identified by an OpenTrace ingest endpoint or an `otk_` credential. Your own env vars survive, `env` is dropped only if nothing is left in it, and a block pointing at your own collector is reported and left alone.
+
+The usage key itself stays valid server-side; removing the block just stops anything using it. Revoke it in the dashboard if you want it gone.
 
 ## What it writes
 
@@ -207,7 +224,24 @@ Opt-in, asked during `connect`/`install` (or forced with `--track-usage` / suppr
 }
 ```
 
-Existing `env` entries are preserved. The ingest endpoint follows the same host as everything else — pass `--url`/`--base-url` and it moves too. On re-runs, a usage key already in the target file is revalidated against the ingest endpoint and kept if still good — that check is what keeps re-runs converging on one key (the server mints a fresh key per provisioning call); a rejected one is replaced with a fresh key.
+Existing `env` entries are preserved. The ingest endpoint follows the same host as everything else — pass `--url`/`--base-url` and it moves too.
+
+### When the existing key is checked, kept, or replaced
+
+Whatever the run is doing, if monitoring is already configured it is **checked first**, before you are asked anything — so a revoked key is reported even on a run that goes on to decline monitoring, and even by `--no-track-usage`. That matters because the failure is otherwise silent: Claude Code has no way to tell you its exports are being turned away.
+
+Given a key already on file, and having decided to proceed:
+
+| Situation | What happens |
+|---|---|
+| Key still valid, and this run used a key already on the machine (keychain / plugin token) | **Kept.** This is what stops repeat `install` runs minting key after key, since the server provisions a fresh one per call. |
+| Key still valid, but this run brought its own CLI key (`connect otk_…`, `login`, `--api-key`, a pasted key) | **Replaced.** A usage key reports to whichever CLI key provisioned it, so keeping the old one would go on attributing your usage to the previous owner. |
+| Key rejected | **Replaced.** |
+| Key unverifiable (endpoint unreachable) | **Kept**, with a note — a network failure says nothing about a key. |
+
+Replacement is never destructive: if provisioning the new key fails, the existing block is left exactly as it was rather than removed. And the scope of an existing block wins over the run's default, so re-running against a global setup refreshes it in place instead of writing a second block at project level.
+
+Since a replaced key is not deleted server-side, reconnecting repeatedly leaves auto-created keys behind — they're tagged as such in your key list, and safe to prune.
 
 The usage key can only *write* telemetry (it is refused by the MCP and REST surfaces), so a leak from a committed `.claude/settings.json` cannot read your graph — but pick "All projects" if you'd rather keep it out of the repo entirely.
 
@@ -258,6 +292,41 @@ Note the two different OAuth flows, which are easy to confuse:
 The **Claude Code plugin supports both** a key and OAuth, and `otx install` can set up either: choose browser sign-in or paste a key (or pass `--api-key`) for the key path — the same result as `otx connect otk_… --client claude-code` — or skip it for in-tool OAuth. With a key present the plugin authenticates by header; without one its headers helper returns nothing and Claude Code falls back to OAuth.
 
 Keys can expire or be revoked — if calls start returning `401`, reconnect with a fresh key.
+
+## Testing
+
+```bash
+npm test              # typecheck-free run: build, then unit + integration
+npm run test:unit     # pure logic only — fast, no child processes
+npm run lint          # typechecks src and test together
+```
+
+No test dependencies: `node:test` plus `tsc`. Tests compile alongside `src` into `build-test/`, so unit tests exercise the same TypeScript the package ships, while integration tests spawn the real `dist/index.js`.
+
+**Everything is hermetic.** Integration tests run against a local stub (`test/stub-server.ts`) standing in for the MCP mount, the usage-key endpoint, the OTLP ingest mount, the OAuth metadata document and the npm registry — all five, because the CLI derives every one from a single host. That lets tests assert on states you cannot summon against production: a revoked key, a server too old to provision usage keys, a newer release on npm.
+
+`HOME` accounts for nearly all isolation, since every config path derives from `os.homedir()`. Three things escape it and have env seams, set only by the harness:
+
+| Variable | Why it exists |
+|---|---|
+| `OTX_KEYCHAIN_SERVICE` | The OS keychain is machine-wide. Without a namespace, a test run would read, overwrite and delete your real entries. |
+| `OTX_REGISTRY_URL` | Redirects the update check off npm. |
+| `OTX_FORCE_NOTICES` | The banner is suppressed without a TTY, and a piped child process has none. Only ever loosens — an explicit `OTX_NO_NOTICES` still wins. |
+
+Two known gaps, stated rather than hidden: the **interactive prompts** need a pseudo-terminal, so prompt copy and defaults (including `otx login -y` keeping a valid key) are verified by hand rather than in CI; and the **browser sign-in** needs a real browser, so `otx login`'s OAuth round trip is never exercised automatically.
+
+### Trying an unreleased build on any machine
+
+`npm link` and `npm i -g` both overwrite the `otx` you actually use. This packs the candidate exactly as npm would publish it and installs *that* into a throwaway prefix instead:
+
+```bash
+eval "$(scripts/try-candidate.sh)"     # exports OTX and OTX_PREFIX
+SANDBOX=$(mktemp -d)
+HOME=$SANDBOX "$OTX" install --express # a real binary, none of your config
+rm -rf "$SANDBOX" "$OTX_PREFIX"
+```
+
+Same packaging, same bin shims, same `files` list as a release — and your global install is untouched. Note the keychain caveat above: a temp `HOME` does not cover it, so set `OTX_KEYCHAIN_SERVICE` too if the run might store a key.
 
 ## License
 

@@ -1,6 +1,6 @@
 {
   "name": "@opentrace/cli",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "CLI for setting up and managing OpenTrace integrations",
   "type": "module",
   "workspaces": [
@@ -25,9 +25,13 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "lint": "tsc --noEmit",
-    "clean": "rm -rf dist",
-    "prepublishOnly": "npm run clean && npm run build"
+    "lint": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "clean": "rm -rf dist build-test",
+    "prepublishOnly": "npm run clean && npm run build",
+    "build:test": "tsc -p tsconfig.test.json",
+    "test": "npm run build && npm run build:test && node scripts/run-tests.mjs",
+    "test:unit": "npm run build:test && node scripts/run-tests.mjs unit",
+    "test:integration": "npm run build && npm run build:test && node scripts/run-tests.mjs integration"
   },
   "repository": {
     "type": "git",
