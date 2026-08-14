@@ -6,7 +6,11 @@
 
 import { Entry } from "@napi-rs/keyring"
 
-const SERVICE = "opentrace-cli"
+// The keychain is the one piece of state a sandboxed HOME does NOT isolate — it
+// is a machine-wide service, so a test run would read, overwrite and delete the
+// real user's entries. Namespacing the service name is what makes an isolated
+// test run possible at all; nothing but the test harness sets this.
+const SERVICE = process.env.OTX_KEYCHAIN_SERVICE ?? "opentrace-cli"
 
 /** Thrown when the OS keychain backend is unavailable (e.g. headless Linux with no Secret Service). */
 export class KeychainUnavailableError extends Error {}

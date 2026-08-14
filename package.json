@@ -25,9 +25,13 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "lint": "tsc --noEmit",
-    "clean": "rm -rf dist",
-    "prepublishOnly": "npm run clean && npm run build"
+    "lint": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "clean": "rm -rf dist build-test",
+    "prepublishOnly": "npm run clean && npm run build",
+    "build:test": "tsc -p tsconfig.test.json",
+    "test": "npm run build && npm run build:test && node --test build-test/test/unit/*.test.js build-test/test/integration/*.test.js",
+    "test:unit": "npm run build:test && node --test build-test/test/unit/*.test.js",
+    "test:integration": "npm run build && npm run build:test && node --test build-test/test/integration/*.test.js"
   },
   "repository": {
     "type": "git",
