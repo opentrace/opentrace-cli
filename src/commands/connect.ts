@@ -153,7 +153,6 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     if (hasClaudeCodeDesktop()) {
       console.log("Claude Code Desktop (the Claude app's Code tab) is covered too — start a NEW desktop session to pick it up.")
     }
-    console.log("Heads up: keys can expire or be revoked — if calls start returning 401, reconnect with a fresh key.")
     return
   }
 
@@ -195,7 +194,6 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
 
   console.log()
   console.log(`Restart ${client.label} to activate the connection.`)
-  console.log("Heads up: keys can expire or be revoked — if calls start returning 401, reconnect with a fresh key.")
 
   // Surface other installed clients the user might also want to connect.
   const others = detectKeyClients().filter((c) => c.id !== client.id)

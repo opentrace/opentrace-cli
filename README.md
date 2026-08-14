@@ -291,7 +291,7 @@ Note the two different OAuth flows, which are easy to confuse:
 
 The **Claude Code plugin supports both** a key and OAuth, and `otx install` can set up either: choose browser sign-in or paste a key (or pass `--api-key`) for the key path — the same result as `otx connect otk_… --client claude-code` — or skip it for in-tool OAuth. With a key present the plugin authenticates by header; without one its headers helper returns nothing and Claude Code falls back to OAuth.
 
-Keys can expire or be revoked — if calls start returning `401`, reconnect with a fresh key.
+A key that expires or is revoked is otx's problem, not yours to watch for: the [notice banner](#notices) tells you the next time you run any command, and names the fix. You do not need to recognise a `401`.
 
 ## Testing
 
