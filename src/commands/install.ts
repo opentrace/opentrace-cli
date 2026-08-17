@@ -659,6 +659,32 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     }
   }
 
+  // The desktop app's plugin panel is fed by the account, not by ~/.claude, so a
+  // locally installed plugin is never listed there however correctly it is set up.
+  // The connector entry IS read — and it is what makes OpenTrace visible in the
+  // app at all — so a machine running the desktop app gets that too.
+  //
+  // The cost is named rather than hidden: this file wins a name collision in
+  // Code-tab sessions, so those go through the npx bridge instead of the plugin's
+  // direct mount. Visible and working beats a faster transport nobody can find.
+  if (key && hasClaudeCodeDesktop() && targets.some((i) => i.id === "claude-code")) {
+    const desktop = findKeyClient("claude-desktop")
+    if (desktop) {
+      try {
+        const hadEntry = hasKeyClientEntry(desktop)
+        const attached = attachClientKey(desktop, mcpUrl, key.token)
+        results.push({
+          label: "Claude Code Desktop (connector)",
+          configPath: attached.configPath,
+          status: hadEntry ? "updated" : "added",
+        })
+        notes.push("Quit and relaunch the Claude app for the connector to appear — a new session is not enough.")
+      } catch (err) {
+        console.error(`  Claude Code Desktop (connector): failed — ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+  }
+
   // Config is read when a session starts, so a running one never notices. This
   // used to claim the desktop app was "covered by the above" — the engine does
   // read these files, but the app's own plugin panel is a separate surface, so
