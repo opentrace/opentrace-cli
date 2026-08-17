@@ -115,12 +115,14 @@ describe("connect otk_… (key flow)", () => {
     assert.match(r.output, /mcp-remote/)
   })
 
-  it("warns that claude_desktop_config.json shadows the native mount in Code sessions", async () => {
-    // Only when the Code tab is actually present on the machine.
+  it("warns that Code sessions will list the bridge as a second server", async () => {
+    // Only when the Code tab is actually present on the machine. It does not
+    // shadow the plugin's mount — a plugin server is scoped
+    // (plugin:opentrace:opentrace), so the two coexist rather than collide.
     sb.seedClaudeCodeDesktop()
     const r = await sb.run(["connect", CLI_KEY, ...url(), "--client", "claude-desktop", "--no-track-usage"])
     assert.equal(r.code, 0)
-    assert.match(r.output, /Code-tab sessions will use this bridge/)
+    assert.match(r.output, /second `opentrace` server/)
   })
 })
 

@@ -9,14 +9,22 @@
 // what was missing was knowing the app is there at all, and two places where the
 // desktop app behaves differently enough to be worth saying out loud:
 //
-//   1. It ALSO loads MCP servers from `claude_desktop_config.json` into local
-//      Code-tab sessions, and on a name collision that definition WINS over
-//      `~/.claude.json` / `.mcp.json`.
+//   1. The app ALSO injects the MCP servers from `claude_desktop_config.json`
+//      into local Code-tab sessions — it spawns the engine with `--mcp-config`,
+//      so the engine itself never reads that file (its only mention of it is the
+//      explicit `claude mcp add-from-claude-desktop` import, Mac/WSL only).
+//      Those injected servers do NOT displace a plugin's: a plugin registers its
+//      server under the scoped name `plugin:<plugin>:<server>` — verified with
+//      `claude mcp list`, which prints ours as `plugin:opentrace:opentrace` —
+//      so an entry named `opentrace` in `claude_desktop_config.json` sits
+//      ALONGSIDE it, and Code-tab sessions then list two OpenTrace servers.
+//      (The docs' collision rule is about two entries sharing one bare name.)
 //   2. Config is read at session start, so a running session never picks up a
 //      change — a new session is required, not just a restart.
 //
 // Verified against https://code.claude.com/docs/en/desktop ("Shared
-// configuration") and the engine build the app downloads.
+// configuration"), https://code.claude.com/docs/en/mcp ("MCP servers from the
+// Claude Desktop chat app") and the engine build the app downloads.
 
 import fs from "node:fs"
 import os from "node:os"

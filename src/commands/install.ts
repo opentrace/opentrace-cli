@@ -13,9 +13,10 @@ import { resolveTelemetryPlan, writeTelemetryEnv, USAGE_PRIVACY_NOTE } from "../
 import { cliKeyId, recordKeyVerdict } from "../util/notice-state.js"
 import { loginWithBrowser } from "../util/oauth/flow.js"
 import { looksHeadless } from "../util/oauth/browser.js"
-import { claudeCodeSurfaces, hasClaudeCodeDesktop } from "../util/claude-app.js"
+import { claudeCodeSurfaces, hasClaudeCodeDesktop, isClaudeAppInstalled } from "../util/claude-app.js"
 import { ensurePluginInstalled } from "../util/claude-plugins.js"
 import { findKeyClient, hasKeyClientEntry } from "../key-clients/index.js"
+import { npxAvailable } from "../key-clients/claude-desktop.js"
 import type { Integration } from "../integrations/types.js"
 
 interface InstallCommandOptions {
@@ -402,8 +403,14 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     express = (await promptMode(detected)) === "express"
   }
 
+  // What Express is about to set up. Per-tool flags win over detection further
+  // down (`--express --cursor` is a coherent request), so the plan is written
+  // from the same list the write loop will use — describing `detected` there
+  // made every line of the summary wrong for exactly that combination.
+  const planTargets = explicitTargets.length > 0 ? explicitTargets : detected
+
   if (express) {
-    if (detected.length === 0) {
+    if (planTargets.length === 0) {
       // Express has nothing to be express about. Falling back to the tool list
       // beats silently doing nothing, or writing config for tools that are
       // nowhere on this machine.
@@ -413,13 +420,22 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     } else {
       console.log()
       console.log("Express setup:")
-      console.log(`  • Tools:   ${detected.map((i) => i.label).join(", ")}`)
+      console.log(`  • Tools:   ${planTargets.map((i) => i.label).join(", ")}`)
       console.log("  • Scope:   all projects (user-level config)")
       // `--express --no-track-usage` is a coherent request, and the flag wins —
       // so the summary must not claim monitoring the run then skips.
-      if (detected.some((i) => i.id === "claude-code") && opts.trackUsage !== false) {
+      if (planTargets.some((i) => i.id === "claude-code") && opts.trackUsage !== false) {
         console.log("  • Usage:   monitoring your Claude Code usage in OpenTrace")
         console.log(`             ${USAGE_PRIVACY_NOTE}`)
+      }
+      // The chat surface of the Claude app is not one of the tools in the list
+      // above, and setting it up writes a file none of them named — so Express
+      // says so here. Carries the same Claude Code condition as the write itself:
+      // a run that named another tool is not a request to touch the Claude app.
+      // Its other prerequisite is a key, which the sign-in line below is already
+      // honest about.
+      if (isClaudeAppInstalled() && planTargets.some((i) => i.id === "claude-code")) {
+        console.log("  • Desktop: the Claude app's chat surface too, once signed in")
       }
       // Only promise the sign-in this run can actually perform: `--express -y`
       // and `--express` in CI have no browser to open, and the key step falls
@@ -510,6 +526,49 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     explicitCliKey: key !== undefined && key.source !== "keychain" && key.source !== "plugin",
     targetsClaudeCode: targets.some((i) => i.id === "claude-code"),
   })
+
+  // 6. The Claude desktop app's CHAT surface — the one surface a Claude Code
+  //    setup does not already reach. Its config file takes stdio servers only, so
+  //    the `mcp-remote` bridge is the only route a local command can write; the
+  //    alternative, a custom connector added by URL, lives in the claude.ai
+  //    account and is nothing a CLI can do on the user's behalf.
+  //
+  //    Gated on the app being installed rather than on its Code tab having run:
+  //    the Code tab shares ~/.claude, where the plugin is already installed, so
+  //    it needs nothing from us — the chat surface is what earns this write.
+  //    Gating it the other way round asked for the cost and skipped the benefit.
+  //
+  //    The cost is a duplicate, not a downgrade: the app injects these servers
+  //    into local Code-tab sessions too, and a plugin's server is scoped
+  //    (`plugin:opentrace:opentrace`), so the bridge never replaces it — such
+  //    sessions list OpenTrace twice. Reported in the notes rather than hidden.
+  //
+  //    Decided here, with the other prompts, so nothing asks a question after the
+  //    first file has been written.
+  const desktopClient =
+    key && isClaudeAppInstalled() && targets.some((i) => i.id === "claude-code")
+      ? findKeyClient("claude-desktop")
+      : undefined
+  let desktopPlanned = desktopClient !== undefined
+  let desktopSkipNote: string | undefined
+  if (desktopClient) {
+    if (!npxAvailable()) {
+      // A bridge entry without npx is a connector that fails to start — worse
+      // than absent, since the app lists it as available.
+      desktopPlanned = false
+      desktopSkipNote =
+        "Claude Desktop: skipped — the connector runs through `npx`, which isn't on PATH. " +
+        "Install Node, then run `otx connect --client claude-desktop`."
+    } else if (interactive && !express) {
+      // Custom asks, because this is a different product surface from the tools
+      // in the list and the key lands in a file none of the answers so far named.
+      // Express does not ask — it announced this in its plan instead.
+      desktopPlanned = await confirm({
+        message: "Also connect the Claude app's chat surface? (writes claude_desktop_config.json)",
+        default: true,
+      })
+    }
+  }
 
   // Only the flag path asks "overwrite?" per tool. The checkbox already labels
   // which tools are configured and the user selected them anyway, so a confirm
@@ -659,29 +718,23 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     }
   }
 
-  // The desktop app's plugin panel is fed by the account, not by ~/.claude, so a
-  // locally installed plugin is never listed there however correctly it is set up.
-  // The connector entry IS read — and it is what makes OpenTrace visible in the
-  // app at all — so a machine running the desktop app gets that too.
-  //
-  // The cost is named rather than hidden: this file wins a name collision in
-  // Code-tab sessions, so those go through the npx bridge instead of the plugin's
-  // direct mount. Visible and working beats a faster transport nobody can find.
-  if (key && hasClaudeCodeDesktop() && targets.some((i) => i.id === "claude-code")) {
-    const desktop = findKeyClient("claude-desktop")
-    if (desktop) {
-      try {
-        const hadEntry = hasKeyClientEntry(desktop)
-        const attached = attachClientKey(desktop, mcpUrl, key.token)
-        results.push({
-          label: "Claude Code Desktop (connector)",
-          configPath: attached.configPath,
-          status: hadEntry ? "updated" : "added",
-        })
-        notes.push("Quit and relaunch the Claude app for the connector to appear — a new session is not enough.")
-      } catch (err) {
-        console.error(`  Claude Code Desktop (connector): failed — ${err instanceof Error ? err.message : String(err)}`)
-      }
+  // Apply the chat-surface decision made above (see step 6).
+  if (desktopSkipNote) notes.push(desktopSkipNote)
+  if (desktopClient && desktopPlanned && key) {
+    try {
+      const hadEntry = hasKeyClientEntry(desktopClient)
+      const attached = attachClientKey(desktopClient, mcpUrl, key.token)
+      results.push({
+        label: "Claude Desktop (chat connector)",
+        configPath: attached.configPath,
+        status: hadEntry ? "updated" : "added",
+      })
+      // The client's own note carries the npx and duplicate-server caveats, which
+      // this block used to drop on the floor.
+      if (attached.note) notes.push(`Claude Desktop: ${attached.note}`)
+      notes.push("Quit and relaunch the Claude app for the connector to appear — a new session is not enough.")
+    } catch (err) {
+      console.error(`  Claude Desktop (chat connector): failed — ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
