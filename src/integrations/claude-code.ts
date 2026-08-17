@@ -66,7 +66,13 @@ function writePluginMcpUrl(mcpUrl: string): string {
   const id = pluginId()
   const pluginConfigs = settings.pluginConfigs ?? {}
   const existing = pluginConfigs[id] ?? {}
-  pluginConfigs[id] = { ...existing, options: { ...(existing.options ?? {}), mcp_url: mcpUrl } }
+  // Stripped here and not in normalizeMcpUrl: this value becomes the plugin's OAuth
+  // `resource`, which must match what the server advertises. The slashed form still
+  // keys the keychain and notice cache, and changing that would orphan both.
+  pluginConfigs[id] = {
+    ...existing,
+    options: { ...(existing.options ?? {}), mcp_url: mcpUrl.replace(/\/+$/, "") },
+  }
   settings.pluginConfigs = pluginConfigs
   writeJsonConfig(configPath, settings)
   return configPath

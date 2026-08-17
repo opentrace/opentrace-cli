@@ -24,7 +24,9 @@ const path = require("node:path")
 const { execFileSync } = require("node:child_process")
 
 const PROTOCOL_VERSION = "2025-06-18"
-const DEFAULT_MCP_URL = "https://api.opentrace.ai/mcp/v1/"
+// No trailing slash: the server advertises this exact form as its OAuth resource
+// identifier, and Claude Code derives the `resource` parameter from it.
+const DEFAULT_MCP_URL = "https://api.opentrace.ai/mcp/v1"
 const PLUGIN_CONFIG_KEY = "opentrace@opentrace"
 const TOKEN_PATH = path.join(os.homedir(), ".claude", "opentrace-plugin.token")
 const CACHE_PATH = path.join(os.homedir(), ".claude", "opentrace-prewarm.json")
@@ -277,8 +279,10 @@ function readToken() {
 }
 
 function resolveMcpUrl(cwd) {
-  const withSlash = (u) => (u.endsWith("/") ? u : `${u}/`)
-  if (process.env.OPENTRACE_MCP_URL) return withSlash(process.env.OPENTRACE_MCP_URL.trim())
+  // Strip any trailing slash rather than adding one (see DEFAULT_MCP_URL), which also
+  // repairs a slashed value left in settings by an older otx.
+  const canonical = (u) => u.replace(/\/+$/, "")
+  if (process.env.OPENTRACE_MCP_URL) return canonical(process.env.OPENTRACE_MCP_URL.trim())
   // Hooks can't read ${user_config.*}, but Claude Code persists it in settings.
   const candidates = [
     path.join(cwd, ".claude", "settings.local.json"),
@@ -290,7 +294,7 @@ function resolveMcpUrl(cwd) {
     try {
       const settings = JSON.parse(fs.readFileSync(p, "utf8"))
       const url = settings?.pluginConfigs?.[PLUGIN_CONFIG_KEY]?.options?.mcp_url
-      if (typeof url === "string" && url.trim()) return withSlash(url.trim())
+      if (typeof url === "string" && url.trim()) return canonical(url.trim())
     } catch {
       /* missing or invalid settings file */
     }
