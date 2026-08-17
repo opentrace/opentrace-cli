@@ -18,8 +18,7 @@ interface DesktopConfig {
   mcpServers: Record<string, StdioServer | Record<string, unknown>>
 }
 
-const BRIDGE_NOTE =
-  "Claude Desktop reaches remote servers through the `mcp-remote` bridge — it needs Node.js/npx installed, and adds a little startup latency."
+const BRIDGE_NOTE = "Claude Desktop connects through the `mcp-remote` bridge, which needs npx."
 
 /**
  * The same file feeds the app's **Code** tab, where a name collision resolves in
@@ -27,10 +26,7 @@ const BRIDGE_NOTE =
  * Code Desktop from the native HTTP mount to the npx bridge. Unavoidable (the
  * chat surface accepts nothing else), so it is said rather than hidden.
  */
-const CODE_TAB_NOTE =
-  "This machine also runs Claude Code Desktop (the app's Code tab), which loads this file too and prefers it over " +
-  "~/.claude.json / .mcp.json for a server of the same name — so Code-tab sessions will use the npx bridge rather than " +
-  "the native HTTP mount. Remove the `opentrace` entry from this file if you would rather Code sessions used the direct endpoint."
+const CODE_TAB_NOTE = "Code-tab sessions will use this bridge too, in preference to the direct endpoint."
 
 const claudeDesktop: KeyClient = {
   id: "claude-desktop",

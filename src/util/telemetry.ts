@@ -394,8 +394,7 @@ export async function resolveTelemetryPlan(args: {
   // run was going to touch monitoring — so it is reported either way.
   const existing = await findConfiguredTelemetry(args.dir, args.baseUrl)
   if (existing?.state === "invalid") {
-    console.warn(`\nUsage monitoring is configured in ${existing.configPath}, but its key was rejected —`)
-    console.warn("nothing has been reaching your OpenTrace dashboard.")
+    console.warn(`\nThe usage key in ${existing.configPath} was rejected — nothing is reaching OpenTrace.`)
   }
 
   let want: boolean
@@ -409,12 +408,12 @@ export async function resolveTelemetryPlan(args: {
       // A block is there but carries no key we can verify — hand-edited, or
       // written by something else. Saying so beats the first-run question, which
       // would imply nothing is configured and then quietly overwrite it.
-      console.log(`Usage monitoring is already configured in ${existing.configPath}, but its key could not be verified.`)
+      console.log(`Already configured in ${existing.configPath}, but the key could not be verified.`)
       want = await confirm({ message: "Set it up again with a fresh usage key?", default: true })
     } else if (existing?.state === "valid") {
       // Already working. Offered rather than assumed, because saying yes here
       // may replace the key (see explicitCliKey) rather than being a no-op.
-      console.log(`Your Claude Code usage is already reaching OpenTrace (key in ${existing.configPath}).`)
+      console.log(`Already monitoring (key in ${existing.configPath}).`)
       want = await confirm({ message: "Check and refresh usage monitoring?", default: true })
     } else {
       console.log("Your Claude Code cost, tokens and session activity, on your own OpenTrace dashboard.")
@@ -484,9 +483,7 @@ export async function resolveTelemetryPlan(args: {
       recordKeyVerdict(usageKeyId(configPath), existingToken, state === "valid" ? "valid" : "rejected")
     }
     if (state !== "invalid" && args.explicitCliKey) {
-      console.log(
-        `  ↻ replacing the usage key in ${configPath} — this run signed in with its own CLI key, and a usage key reports to whichever key provisioned it.`,
-      )
+      console.log(`  ↻ replacing the usage key in ${configPath} — this run brought its own CLI key.`)
     } else if (state !== "invalid") {
       if (state === "unknown") {
         console.warn(`Note: could not verify the usage key already in ${configPath} — keeping it.`)
