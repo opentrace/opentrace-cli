@@ -403,8 +403,14 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     express = (await promptMode(detected)) === "express"
   }
 
+  // What Express is about to set up. Per-tool flags win over detection further
+  // down (`--express --cursor` is a coherent request), so the plan is written
+  // from the same list the write loop will use — describing `detected` there
+  // made every line of the summary wrong for exactly that combination.
+  const planTargets = explicitTargets.length > 0 ? explicitTargets : detected
+
   if (express) {
-    if (detected.length === 0) {
+    if (planTargets.length === 0) {
       // Express has nothing to be express about. Falling back to the tool list
       // beats silently doing nothing, or writing config for tools that are
       // nowhere on this machine.
@@ -414,19 +420,21 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     } else {
       console.log()
       console.log("Express setup:")
-      console.log(`  • Tools:   ${detected.map((i) => i.label).join(", ")}`)
+      console.log(`  • Tools:   ${planTargets.map((i) => i.label).join(", ")}`)
       console.log("  • Scope:   all projects (user-level config)")
       // `--express --no-track-usage` is a coherent request, and the flag wins —
       // so the summary must not claim monitoring the run then skips.
-      if (detected.some((i) => i.id === "claude-code") && opts.trackUsage !== false) {
+      if (planTargets.some((i) => i.id === "claude-code") && opts.trackUsage !== false) {
         console.log("  • Usage:   monitoring your Claude Code usage in OpenTrace")
         console.log(`             ${USAGE_PRIVACY_NOTE}`)
       }
       // The chat surface of the Claude app is not one of the tools in the list
       // above, and setting it up writes a file none of them named — so Express
-      // says so here. Its one prerequisite is a key, which the sign-in line below
-      // is already honest about.
-      if (isClaudeAppInstalled()) {
+      // says so here. Carries the same Claude Code condition as the write itself:
+      // a run that named another tool is not a request to touch the Claude app.
+      // Its other prerequisite is a key, which the sign-in line below is already
+      // honest about.
+      if (isClaudeAppInstalled() && planTargets.some((i) => i.id === "claude-code")) {
         console.log("  • Desktop: the Claude app's chat surface too, once signed in")
       }
       // Only promise the sign-in this run can actually perform: `--express -y`

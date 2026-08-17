@@ -50,6 +50,20 @@ describe("install --express", () => {
     assert.match(r.stdout, /Claude Desktop \(chat connector\)/)
   })
 
+  it("describes the flagged tools, not the detected ones", async () => {
+    // `--express --cursor` sets up Cursor; the plan used to name every detected
+    // tool, promise usage monitoring and announce the Claude app — none of which
+    // that run goes on to do.
+    sb.seedClaudeApp()
+    sb.seedPluginToken(CLI_KEY)
+    const r = await sb.run(["install", sb.project, "--express", "-y", "--cursor", ...sb.base])
+    assert.equal(r.code, 0)
+    assert.match(r.stdout, /Tools:\s+Cursor$/m)
+    assert.doesNotMatch(r.stdout, /Desktop:/)
+    assert.doesNotMatch(r.stdout, /monitoring your Claude Code usage/)
+    assert.equal(fs.existsSync(sb.claudeDesktopConfigPath()), false)
+  })
+
   it("honours an explicit --no-track-usage instead of overriding it", async () => {
     sb.seedPluginToken(CLI_KEY)
     const r = await sb.run(["install", sb.project, "--express", "-y", "--no-track-usage", ...sb.base])
