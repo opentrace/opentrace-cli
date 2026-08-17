@@ -57,7 +57,7 @@ describe("install --express", () => {
   it("promises only the sign-in it can perform", async () => {
     // No browser in a non-interactive run, so it must not claim one.
     const r = await sb.run(["install", sb.project, "--express", "-y", ...sb.base])
-    assert.match(r.stdout, /Sign-in: any CLI key already on this machine/)
+    assert.match(r.stdout, /Sign-in: a key already on this machine/)
     assert.doesNotMatch(r.stdout, /Sign-in: your browser/)
   })
 
@@ -114,6 +114,47 @@ describe("install (flag-driven)", () => {
   })
 })
 
+describe("install finishes the plugin install", () => {
+  // Writing enabledPlugins only *asks* for the plugin — Claude Code installs it
+  // when it next prompts. A terminal shows that prompt; the desktop app does not,
+  // so onboarding used to end with nothing in /plugin and no way to tell.
+  const installedPlugins = (): any =>
+    JSON.parse(fs.readFileSync(path.join(sb.home, ".claude", "plugins", "installed_plugins.json"), "utf8"))
+
+  it("installs the plugin, not just the declaration", async () => {
+    const PATH = sb.seedClaudeBinary()
+    const r = await sb.run(
+      ["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base],
+      { env: { PATH } },
+    )
+    assert.equal(r.code, 0)
+    assert.equal(sb.readSettings("user").enabledPlugins?.["opentrace@opentrace"], true, "declared")
+    assert.ok(installedPlugins().plugins["opentrace@opentrace"], "and actually installed")
+    assert.match(r.stdout, /plugin install/)
+  })
+
+  it("says what to run when there is no claude executable to do it with", async () => {
+    // An empty PATH: nothing to shell out to, and no bundled app engine either.
+    const r = await sb.run(
+      ["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base],
+      { env: { PATH: path.join(sb.home, "nothing-here") } },
+    )
+    assert.equal(r.code, 0, "still succeeds — the declaration is written")
+    assert.match(r.output, /claude plugin install opentrace@opentrace/)
+  })
+
+  it("does not re-install one that is already there", async () => {
+    const PATH = sb.seedClaudeBinary()
+    await sb.run(["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base], { env: { PATH } })
+    const second = await sb.run(
+      ["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base],
+      { env: { PATH } },
+    )
+    assert.equal(second.code, 0)
+    assert.doesNotMatch(second.stdout, /plugin install/)
+  })
+})
+
 describe("install usage-key lifecycle", () => {
   it("keeps a valid usage key when the CLI key came from local storage", async () => {
     const usage = otk("existing-usage")
@@ -158,7 +199,7 @@ describe("install usage-key lifecycle", () => {
     sb.seedTelemetry("user", usage)
     const r = await sb.run(["install", sb.project, "-y", "--claude-code", "--no-track-usage", ...sb.base])
     assert.equal(r.code, 0)
-    assert.match(r.output, /its key was rejected/)
+    assert.match(r.output, /usage key in .* was rejected/)
     assert.match(r.output, /otx disconnect --usage/)
     // Declining means declining: the block is reported, not rewritten.
     assert.equal(telemetryToken(sb.readSettings("user")), usage)

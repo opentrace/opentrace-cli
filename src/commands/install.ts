@@ -2,7 +2,7 @@ import path from "node:path"
 import fs from "node:fs"
 import { checkbox, confirm, password, select } from "@inquirer/prompts"
 import { ALL_INTEGRATIONS, detectInstalled, integrationsFromFlags } from "../util/detect.js"
-import { DEFAULT_BASE_URL, buildMcpUrl, buildIngestUrl } from "../util/constants.js"
+import { DEFAULT_BASE_URL, buildMcpUrl, buildIngestUrl, pluginId } from "../util/constants.js"
 import { isInteractive } from "../util/tty.js"
 import { maskToken, validateTokenShape } from "../util/token.js"
 import { probeMcp } from "../util/mcp-probe.js"
@@ -14,6 +14,7 @@ import { cliKeyId, recordKeyVerdict } from "../util/notice-state.js"
 import { loginWithBrowser } from "../util/oauth/flow.js"
 import { looksHeadless } from "../util/oauth/browser.js"
 import { claudeCodeSurfaces, hasClaudeCodeDesktop } from "../util/claude-app.js"
+import { ensurePluginInstalled } from "../util/claude-plugins.js"
 import { findKeyClient, hasKeyClientEntry } from "../key-clients/index.js"
 import type { Integration } from "../integrations/types.js"
 
@@ -428,7 +429,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
       } else if (interactive) {
         console.log("  • Sign-in: your browser, which mints a CLI key for this machine")
       } else {
-        console.log("  • Sign-in: any CLI key already on this machine — a non-interactive run cannot open a browser")
+        console.log("  • Sign-in: a key already on this machine (no browser without a terminal)")
       }
       console.log()
     }
@@ -530,6 +531,8 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   console.log()
   const results: Row[] = []
   let pluginInstalled = false
+  /** Set when the declaration landed but the plugin could not be installed for the user. */
+  let pluginNeedsInstall = false
   let attachedKey: ResolvedKey | undefined
   /** Tools left authenticating with OAuth — they still need a sign-in step. */
   const oauthTargets: string[] = []
@@ -560,6 +563,16 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
           configPath: pr.configPath,
           status: pr.alreadyEnabled ? "updated" : "added",
         })
+
+        // The declaration only *asks* for the plugin; Claude Code installs it when
+        // it next prompts. A terminal shows that prompt, the desktop app does not —
+        // so onboarding used to finish with nothing in /plugin and no way to tell.
+        const ensured = ensurePluginInstalled(pluginId())
+        if (ensured.installed && !ensured.alreadyInstalled) {
+          results.push({ label: `${integration.label} (plugin install)`, configPath: "Claude Code plugin list", status: "added" })
+        } else if (!ensured.installed) {
+          pluginNeedsInstall = true
+        }
 
         if (key) {
           // Replacing a key already on file is an update, not an add — a
@@ -619,7 +632,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
       if (key) {
         // Selected, wired up, but this tool has no way to carry the key — say
         // so instead of letting the user assume the key applies everywhere.
-        notes.push(`${integration.label}: no API-key support — sign in from the tool (OAuth) to authorize.`)
+        notes.push(`${integration.label}: no API-key support — sign in from the tool to authorize.`)
       }
     } catch (err) {
       console.error(`  ${integration.label}: failed — ${err instanceof Error ? err.message : String(err)}`)
@@ -638,8 +651,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
       })
       if (!telemetry.plan.isGlobalScope) {
         notes.push(
-          "Usage monitoring: the usage key lands in .claude/settings.json, which is often committed. " +
-            'The key only sends — it cannot read anything in OpenTrace — but pick "All projects" if you don\'t want it in the repo.',
+          "The usage key is in .claude/settings.json, which is often committed. It can only send, never read.",
         )
       }
     } catch (err) {
@@ -647,15 +659,15 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     }
   }
 
-  // Claude Code Desktop needs nothing written for it — the app's Code tab runs
-  // the same engine off the same files as the CLI. What it does need saying is
-  // that a running session will not notice: config is read when a session
-  // starts, so restarting the app is not enough on its own.
+  // Config is read when a session starts, so a running one never notices. This
+  // used to claim the desktop app was "covered by the above" — the engine does
+  // read these files, but the app's own plugin panel is a separate surface, so
+  // that sentence told people they were done when they could see nothing.
   if (targets.some((i) => i.id === "claude-code") && hasClaudeCodeDesktop()) {
-    notes.push(
-      "Claude Code Desktop (the Claude app's Code tab) reads these same files, so it is covered by the above. " +
-        "Start a NEW desktop session to pick it up — one already running won't.",
-    )
+    notes.push("Claude Code Desktop: start a new session to pick this up.")
+  }
+  if (pluginNeedsInstall) {
+    notes.push(`Run \`claude plugin install ${pluginId()}\` to finish installing the plugin.`)
   }
 
   if (results.length === 0) return
@@ -685,11 +697,11 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   console.log()
   console.log("Next steps:")
   console.log("  1. Restart your AI tools to activate the OpenTrace MCP server.")
-  if (pluginInstalled) {
-    console.log("     Claude Code will prompt to install the OpenTrace plugin — accept it, then run /reload-plugins.")
-    if (!attachedKey && !opts.pluginUrl) {
-      console.log("     (it will also ask for the MCP endpoint — the default is production)")
-    }
+  if (pluginInstalled && pluginNeedsInstall) {
+    console.log("     Claude Code will ask to install the plugin — accept it.")
+  }
+  if (pluginInstalled && !attachedKey && !opts.pluginUrl) {
+    console.log("     It will ask for the MCP endpoint; the default is production.")
   }
 
   // Only the tools that ended up without a key still need a sign-in, so name

@@ -109,6 +109,12 @@ export interface Sandbox {
   seedClaudeApp(): void
   /** Pretend the Code tab has run — it downloads its own engine build. */
   seedClaudeCodeDesktop(): void
+  /**
+   * Put a stub `claude` on PATH that records an install the way Claude Code does.
+   * Returns the PATH value to pass to run(), so a test can exercise otx finishing
+   * the plugin install without a real Claude Code on the machine.
+   */
+  seedClaudeBinary(): string
   /** The notice-banner cache, so tests can seed or inspect verdicts. */
   statePath(): string
   readState(): Record<string, any>
@@ -264,6 +270,35 @@ export async function createSandbox(stubOptions: Partial<StubOptions> = {}): Pro
       } catch {
         return false
       }
+    },
+
+    seedClaudeBinary() {
+      const bin = path.join(home, "stub-bin")
+      fs.mkdirSync(bin, { recursive: true })
+      const script = path.join(bin, "claude")
+      fs.writeFileSync(
+        script,
+        [
+          "#!/usr/bin/env node",
+          "const fs = require('node:fs'), path = require('node:path')",
+          "const a = process.argv.slice(2)",
+          "if (a[0] === '--version') { console.log('0.0.0 (stub)'); process.exit(0) }",
+          "if (a[0] === 'plugin' && a[1] === 'install') {",
+          "  const f = path.join(process.env.HOME, '.claude', 'plugins', 'installed_plugins.json')",
+          "  let d = { version: 2, plugins: {} }",
+          "  try { d = JSON.parse(fs.readFileSync(f, 'utf8')) } catch {}",
+          "  d.plugins[a[2]] = [{ scope: 'user', installPath: path.join(process.env.HOME, '.claude', 'plugins', 'cache', 'stub'), version: '0.0.0' }]",
+          "  fs.mkdirSync(path.dirname(f), { recursive: true })",
+          "  fs.writeFileSync(f, JSON.stringify(d, null, 2))",
+          "  console.log('Successfully installed plugin: ' + a[2])",
+          "  process.exit(0)",
+          "}",
+          "process.exit(1)",
+        ].join("\n"),
+        "utf8",
+      )
+      fs.chmodSync(script, 0o755)
+      return `${bin}${path.delimiter}${process.env.PATH ?? ""}`
     },
 
     claudeAppDir: () => claudeAppDirFor(home),

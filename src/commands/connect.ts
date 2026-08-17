@@ -62,7 +62,7 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     switch (probe.kind) {
       case "auth":
         console.error(`\nKey rejected: ${probe.message}`)
-        console.error("Re-copy the key, or create a fresh one, then run connect again — or sign in with `otx login`.")
+        console.error("Re-copy the key, or sign in with `otx login`.")
         break
       case "provisioning":
         console.error(`\nTenant not ready: ${probe.message}`)
@@ -111,7 +111,7 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
       console.log(`  Settings:  ${telemetry.plan.configPath}`)
       console.log(`  Ingest:    ${buildIngestUrl(baseUrl)}`)
       if (!telemetry.plan.isGlobalScope) {
-        console.log('  Note: .claude/settings.json is often committed — the key only sends (it cannot read anything), but pick "All projects" if you don\'t want it in the repo.')
+        console.log("  Note: .claude/settings.json is often committed. The key can only send, never read.")
       }
     } catch (err) {
       console.error(`\nFailed to write usage monitoring config: ${err instanceof Error ? err.message : String(err)}`)
@@ -147,11 +147,11 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     await maybeSetupUsageTracking()
 
     console.log()
-    console.log("Restart Claude Code (or /reload-plugins) to activate — the plugin authenticates with your CLI key.")
+    console.log("Restart Claude Code to activate.")
     // The desktop app's Code tab reads the very files just written, so it is
     // already covered; what it does not do is notice mid-session.
     if (hasClaudeCodeDesktop()) {
-      console.log("Claude Code Desktop (the Claude app's Code tab) is covered too — start a NEW desktop session to pick it up.")
+      console.log("Claude Code Desktop: start a new session to pick this up.")
     }
     return
   }

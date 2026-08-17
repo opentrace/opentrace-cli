@@ -18,9 +18,11 @@
 // and reported rather than rewritten, and a directory is only deleted when the
 // record itself named it and it sits inside the plugins directory.
 
+import { spawnSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { claudeAppDir } from "./claude-app.js"
 
 interface InstalledEntry {
   scope?: string
@@ -212,4 +214,80 @@ export function removeInstalledPlugin(
   }
 
   return result
+}
+
+// ---------------------------------------------------------------------------
+// Installing
+// ---------------------------------------------------------------------------
+
+/** Is the plugin in the records `/plugin` reads? */
+export function isPluginInstalled(pluginId: string): boolean {
+  const installed = readJson<InstalledPlugins>(installedPluginsPath())
+  return Boolean(installed?.plugins && pluginId in installed.plugins)
+}
+
+/**
+ * A `claude` executable, if this machine has one. PATH first, then the copy the
+ * desktop app downloads for its own Code tab — which is the case that matters,
+ * since a desktop-only user may have no CLI on PATH at all.
+ */
+export function findClaudeBinary(): string | undefined {
+  const onPath = spawnSync("claude", ["--version"], { timeout: 15_000, stdio: "ignore" })
+  if (!onPath.error && onPath.status === 0) return "claude"
+
+  const engines = path.join(claudeAppDir(), "claude-code")
+  try {
+    // Newest first: the app keeps old versions around after an update.
+    const versions = fs.readdirSync(engines).sort().reverse()
+    for (const v of versions) {
+      const candidate = path.join(engines, v, "claude")
+      if (fs.existsSync(candidate)) return candidate
+    }
+  } catch {
+    /* no app directory */
+  }
+  return undefined
+}
+
+export interface PluginInstall {
+  /** The plugin is in the install records now. */
+  installed: boolean
+  /** It already was, before this call. */
+  alreadyInstalled: boolean
+  /** The binary used, for reporting. */
+  via?: string
+  /** Why it could not be done, when it could not. */
+  error?: string
+}
+
+/**
+ * Make the declaration real.
+ *
+ * Writing `enabledPlugins` only *asks* for the plugin: Claude Code installs it
+ * when it next prompts the user to accept. In a terminal that prompt arrives and
+ * onboarding appears to work; in the desktop app nothing prompts, so the
+ * declaration sat there and `/plugin` stayed empty while otx reported success.
+ *
+ * So finish the job when a `claude` binary can be found, and say what to run when
+ * it cannot — rather than leaving the user in a state they have no way to see.
+ */
+export function ensurePluginInstalled(pluginId: string): PluginInstall {
+  if (isPluginInstalled(pluginId)) return { installed: true, alreadyInstalled: true }
+
+  const bin = findClaudeBinary()
+  if (!bin) return { installed: false, alreadyInstalled: false, error: "no `claude` executable found" }
+
+  const run = spawnSync(bin, ["plugin", "install", pluginId, "--scope", "user", "-y"], {
+    timeout: 120_000,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+  })
+  if (run.error) {
+    return { installed: false, alreadyInstalled: false, via: bin, error: run.error.message }
+  }
+  // Trust the records, not the exit code: this is what `/plugin` reads.
+  if (isPluginInstalled(pluginId)) return { installed: true, alreadyInstalled: false, via: bin }
+
+  const detail = (run.stderr || run.stdout || "").trim().split("\n").pop() || `exit ${run.status}`
+  return { installed: false, alreadyInstalled: false, via: bin, error: detail }
 }

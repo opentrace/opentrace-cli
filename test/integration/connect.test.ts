@@ -120,7 +120,7 @@ describe("connect otk_… (key flow)", () => {
     sb.seedClaudeCodeDesktop()
     const r = await sb.run(["connect", CLI_KEY, ...url(), "--client", "claude-desktop", "--no-track-usage"])
     assert.equal(r.code, 0)
-    assert.match(r.output, /Code-tab sessions will use the npx bridge/)
+    assert.match(r.output, /Code-tab sessions will use this bridge/)
   })
 })
 
