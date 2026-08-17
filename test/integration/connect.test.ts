@@ -26,8 +26,10 @@ describe("connect otk_… (key flow)", () => {
     assert.equal(user.enabledPlugins?.["opentrace@opentrace"], true)
     assert.equal(
       user.pluginConfigs?.["opentrace@opentrace"]?.options?.mcp_url,
-      `${sb.stub.url}/mcp/v1/`,
-      "mcp_url seeded so the plugin never asks for an endpoint",
+      `${sb.stub.url}/mcp/v1`,
+      "mcp_url seeded so the plugin never asks for an endpoint — and seeded WITHOUT a " +
+        "trailing slash, since Claude Code turns this value into the OAuth `resource` " +
+        "parameter and the server advertises the no-slash form",
     )
     assert.equal(fs.readFileSync(sb.pluginTokenPath(), "utf8").trim(), CLI_KEY)
     // The plugin reads the token file; a header in ~/.claude.json would be a
