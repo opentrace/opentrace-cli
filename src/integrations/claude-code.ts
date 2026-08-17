@@ -66,11 +66,9 @@ function writePluginMcpUrl(mcpUrl: string): string {
   const id = pluginId()
   const pluginConfigs = settings.pluginConfigs ?? {}
   const existing = pluginConfigs[id] ?? {}
-  // Trailing slash stripped only here, not in normalizeMcpUrl: the plugin authenticates
-  // over OAuth, where Claude Code turns this URL into the RFC 8707 `resource` parameter
-  // and the server advertises the no-slash form. Header-based clients carry a bearer
-  // token instead and never send `resource`, so the canonical slashed form still keys
-  // the keychain and the notice cache — changing that would orphan both.
+  // Stripped here and not in normalizeMcpUrl: this value becomes the plugin's OAuth
+  // `resource`, which must match what the server advertises. The slashed form still
+  // keys the keychain and notice cache, and changing that would orphan both.
   pluginConfigs[id] = {
     ...existing,
     options: { ...(existing.options ?? {}), mcp_url: mcpUrl.replace(/\/+$/, "") },
