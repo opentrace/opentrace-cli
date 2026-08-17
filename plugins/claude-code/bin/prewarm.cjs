@@ -24,10 +24,8 @@ const path = require("node:path")
 const { execFileSync } = require("node:child_process")
 
 const PROTOCOL_VERSION = "2025-06-18"
-// No trailing slash: this is the resource identifier the server advertises in its
-// protected-resource metadata, and Claude Code derives the RFC 8707 `resource`
-// parameter from the configured URL. A slash here produces a resource the
-// authorization server does not recognize.
+// No trailing slash: the server advertises this exact form as its OAuth resource
+// identifier, and Claude Code derives the `resource` parameter from it.
 const DEFAULT_MCP_URL = "https://api.opentrace.ai/mcp/v1"
 const PLUGIN_CONFIG_KEY = "opentrace@opentrace"
 const TOKEN_PATH = path.join(os.homedir(), ".claude", "opentrace-plugin.token")
@@ -281,9 +279,8 @@ function readToken() {
 }
 
 function resolveMcpUrl(cwd) {
-  // Strip any trailing slash rather than adding one: see DEFAULT_MCP_URL. This also
-  // repairs a slashed value left in settings by an older otx, so an existing install
-  // starts sending the resource identifier the server actually advertises.
+  // Strip any trailing slash rather than adding one (see DEFAULT_MCP_URL), which also
+  // repairs a slashed value left in settings by an older otx.
   const canonical = (u) => u.replace(/\/+$/, "")
   if (process.env.OPENTRACE_MCP_URL) return canonical(process.env.OPENTRACE_MCP_URL.trim())
   // Hooks can't read ${user_config.*}, but Claude Code persists it in settings.

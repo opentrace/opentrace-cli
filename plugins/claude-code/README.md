@@ -59,8 +59,6 @@ claude plugin install @opentrace/claude-code-plugin
 
 Pointing at a different API (dev/local): the plugin exposes an `mcp_url` config option (default `https://api.opentrace.ai/mcp/v1`). Claude Code prompts for it when the plugin is enabled — set it to e.g. `https://api.dev.opentrace.ai/mcp/v1` or `http://localhost:8000/mcp/v1`. (It's a per-user setting, stored in user settings.)
 
-Leave the trailing slash off. The server advertises `…/mcp/v1` (no slash) as its OAuth resource identifier in its protected-resource metadata, and Claude Code derives the RFC 8707 `resource` parameter from whatever URL it is configured with — a slash produces a resource the authorization server does not recognize. `otx install` strips it for you.
-
 ## Privacy Policy
 
 This plugin sends data to OpenTrace's hosted API (`api.opentrace.ai`), operated by OpenTrace. Nothing is sent to any third party.
