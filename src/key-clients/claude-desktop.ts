@@ -1,4 +1,5 @@
 import fs from "node:fs"
+import path from "node:path"
 import { readJsonConfig, writeJsonConfig, removeJsonEntry } from "../util/json-config.js"
 import { SERVER_KEY } from "../util/constants.js"
 import { claudeAppDir, claudeDesktopConfigPath, hasClaudeCodeDesktop } from "../util/claude-app.js"
@@ -21,12 +22,37 @@ interface DesktopConfig {
 const BRIDGE_NOTE = "Claude Desktop connects through the `mcp-remote` bridge, which needs npx."
 
 /**
- * The same file feeds the app's **Code** tab, where a name collision resolves in
- * favour of this file — so writing the bridge here quietly downgrades Claude
- * Code Desktop from the native HTTP mount to the npx bridge. Unavoidable (the
- * chat surface accepts nothing else), so it is said rather than hidden.
+ * The app injects this file's servers into local Code-tab sessions as well, and
+ * the plugin's own server is scoped (`plugin:opentrace:opentrace`), so the two
+ * never merge — those sessions end up listing OpenTrace twice. Unavoidable while
+ * the chat surface accepts nothing but a stdio command, so it is said rather than
+ * hidden.
  */
-const CODE_TAB_NOTE = "Code-tab sessions will use this bridge too, in preference to the direct endpoint."
+const CODE_TAB_NOTE =
+  "Code-tab sessions will list this bridge as a second `opentrace` server, alongside the plugin's own."
+
+/**
+ * Is `npx` on PATH? The bridge IS an npx invocation, so without it the entry we
+ * write is a server that cannot start. Checked by looking rather than by running
+ * `npx --version`, which costs a subprocess boot to answer a question about a
+ * file's existence.
+ */
+export function npxAvailable(): boolean {
+  const names = process.platform === "win32" ? ["npx.cmd", "npx.exe", "npx"] : ["npx"]
+  return (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .filter(Boolean)
+    .some((dir) =>
+      names.some((name) => {
+        try {
+          fs.accessSync(path.join(dir, name), fs.constants.X_OK)
+          return true
+        } catch {
+          return false
+        }
+      }),
+    )
+}
 
 const claudeDesktop: KeyClient = {
   id: "claude-desktop",
