@@ -181,7 +181,7 @@ export async function disconnect(targetPath: string, opts: DisconnectOptions): P
       for (const removed of cache.removedPaths) {
         console.log(`    deleted ${removed}`)
       }
-      console.log("    Restart Claude Code (or /reload-plugins) for `/plugin` to catch up.")
+      console.log("    Restart Claude Code for `/plugin` to catch up.")
     }
     for (const file of cache.skipped) {
       // Better to say so than to report a clean disconnect that is not one.
@@ -257,9 +257,7 @@ export async function disconnect(targetPath: string, opts: DisconnectOptions): P
           } else if (r.foreign) {
             // Claude Code's OTEL settings are general-purpose. A block pointing
             // somewhere other than OpenTrace belongs to the user, not to us.
-            console.warn(
-              `  ! left the telemetry block in ${configPath} alone — it does not point at OpenTrace.`,
-            )
+            console.warn(`  ! left the block in ${configPath} alone — it does not point at OpenTrace.`)
           } else if (r.error) {
             // The block is ours and still there. Silence here would read as
             // "nothing to remove" while telemetry kept flowing.
@@ -268,7 +266,7 @@ export async function disconnect(targetPath: string, opts: DisconnectOptions): P
         }
         // The key stays valid server-side; it is simply no longer configured.
         if (usageRemoved) {
-          console.log("    (the usage key itself still exists — revoke it in the OpenTrace dashboard if you want it gone)")
+          console.log("    The key still exists — revoke it in the dashboard if you want it gone.")
         }
       }
     }
