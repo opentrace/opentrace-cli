@@ -1,6 +1,6 @@
 # OpenTrace plugin for Claude Code
 
-A thin wrapper around the hosted OpenTrace **dynamic MCP server** (`https://api.opentrace.ai/mcp/v1/`), plus hooks that teach Claude when to reach for it.
+A thin wrapper around the hosted OpenTrace **dynamic MCP server** (`https://api.opentrace.ai/mcp/v1`), plus hooks that teach Claude when to reach for it.
 
 ## What's included
 
@@ -8,6 +8,7 @@ A thin wrapper around the hosted OpenTrace **dynamic MCP server** (`https://api.
 - **`bin/prewarm.cjs`** — resolves the current checkout against OpenTrace at session start (see "Context prewarm" below).
 - **`hooks/session-start.sh`** — injects a ready-to-use binding for the current checkout (environment/workspace slugs, `source_id`, indexed commit, freshness vs. your HEAD) plus routing guidance, so the model's first OpenTrace call needs no discovery hops. Falls back to static workflow guidance when prewarm can't run.
 - **`hooks/user-prompt-submit.sh`** — when a prompt looks like an architecture, dependency, existence, or structure question, reminds the model that the graph tools can answer it — including the exact prewarmed parameters for this checkout when available. Silent (`{}`) otherwise.
+- **`skills/setup/SKILL.md`** — `/opentrace:setup`, and model-invoked when the tools are missing or a call fails to authenticate. Walks the user from an unconnected server through sign-in to a verified tool call, and distinguishes the failure that looks like a broken plugin but isn't: valid credentials against an account with nothing indexed.
 
 ## Context prewarm
 
@@ -57,4 +58,14 @@ claude plugin install github:opentrace/opentrace-cli?path=plugins/claude-code
 claude plugin install @opentrace/claude-code-plugin
 ```
 
-Pointing at a different API (dev/local): the plugin exposes an `mcp_url` config option (default `https://api.opentrace.ai/mcp/v1/`). Claude Code prompts for it when the plugin is enabled — set it to e.g. `https://api.dev.opentrace.ai/mcp/v1/` or `http://localhost:8000/mcp/v1/`. (It's a per-user setting, stored in user settings.)
+Pointing at a different API (dev/local): the plugin exposes an `mcp_url` config option (default `https://api.opentrace.ai/mcp/v1`). Claude Code prompts for it when the plugin is enabled — set it to e.g. `https://api.dev.opentrace.ai/mcp/v1` or `http://localhost:8000/mcp/v1`. (It's a per-user setting, stored in user settings.)
+
+## Privacy Policy
+
+This plugin sends data to OpenTrace's hosted API (`api.opentrace.ai`), operated by OpenTrace. Nothing is sent to any third party.
+
+**What is sent.** MCP tool calls carry the query arguments Claude constructs — search terms, symbol names, repository and workspace identifiers. The session-start prewarm additionally sends the current checkout's git remote URL and commit SHAs, so the server can resolve which indexed repository you are working in. Your source code is read from the graphs OpenTrace has already indexed under your account; the plugin does not upload working-tree file contents.
+
+**What is stored locally.** An API key at `~/.claude/opentrace-plugin.token` (mode 0600) when you connect with one, and a resolved-binding cache at `~/.claude/opentrace-prewarm.json`. Delete either file to clear it.
+
+**Data collection, retention, third-party sharing and contact details** are covered in full by the OpenTrace privacy policy: <https://docs.opentrace.com/privacy-policy/>. Terms of service: <https://docs.opentrace.com/terms-of-service/>.

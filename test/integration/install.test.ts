@@ -39,6 +39,31 @@ describe("install --express", () => {
     assert.equal(fs.existsSync(path.join(sb.project, ".claude", "settings.json")), false)
   })
 
+  it("announces the chat surface it is about to connect", async () => {
+    // Express writes claude_desktop_config.json when the app is there, and a mode
+    // that asks nothing must not put a key in an unannounced file.
+    sb.seedClaudeApp()
+    sb.seedPluginToken(CLI_KEY)
+    const r = await sb.run(["install", sb.project, "--express", "-y", ...sb.base])
+    assert.equal(r.code, 0)
+    assert.match(r.stdout, /Desktop:\s+the Claude app's chat surface/)
+    assert.match(r.stdout, /Claude Desktop \(chat connector\)/)
+  })
+
+  it("describes the flagged tools, not the detected ones", async () => {
+    // `--express --cursor` sets up Cursor; the plan used to name every detected
+    // tool, promise usage monitoring and announce the Claude app — none of which
+    // that run goes on to do.
+    sb.seedClaudeApp()
+    sb.seedPluginToken(CLI_KEY)
+    const r = await sb.run(["install", sb.project, "--express", "-y", "--cursor", ...sb.base])
+    assert.equal(r.code, 0)
+    assert.match(r.stdout, /Tools:\s+Cursor$/m)
+    assert.doesNotMatch(r.stdout, /Desktop:/)
+    assert.doesNotMatch(r.stdout, /monitoring your Claude Code usage/)
+    assert.equal(fs.existsSync(sb.claudeDesktopConfigPath()), false)
+  })
+
   it("honours an explicit --no-track-usage instead of overriding it", async () => {
     sb.seedPluginToken(CLI_KEY)
     const r = await sb.run(["install", sb.project, "--express", "-y", "--no-track-usage", ...sb.base])
@@ -155,21 +180,44 @@ describe("install finishes the plugin install", () => {
   })
 })
 
-describe("install and Claude Code Desktop", () => {
-  // The app's plugin panel is fed by the account, not ~/.claude, so a locally
-  // installed plugin is never listed there. The connector entry IS read — it is
-  // what makes OpenTrace visible in the app — so a machine with the desktop app
-  // gets that too.
-  it("writes the connector when the desktop app is present", async () => {
-    sb.seedClaudeCodeDesktop()
+describe("install and the Claude desktop app", () => {
+  // The chat surface has no other route to a remote authenticated MCP server, so
+  // the bridge in claude_desktop_config.json is what reaches it. The Code tab
+  // needs nothing extra — it shares ~/.claude with the CLI — so the gate is the
+  // app being installed, not its Code tab having run.
+  it("writes the connector when only the app is installed", async () => {
+    sb.seedClaudeApp() // the Code tab has never run
     const r = await sb.run(["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base])
     assert.equal(r.code, 0)
     const cfg = JSON.parse(fs.readFileSync(sb.claudeDesktopConfigPath(), "utf8")) as {
       mcpServers: Record<string, { command: string }>
     }
     assert.equal(cfg.mcpServers.opentrace.command, "npx")
-    assert.match(r.stdout, /Claude Code Desktop \(connector\)/)
+    assert.match(r.stdout, /Claude Desktop \(chat connector\)/)
     assert.match(r.output, /Quit and relaunch/)
+  })
+
+  it("says the Code tab will list OpenTrace twice, and why", async () => {
+    // A plugin's server is scoped (plugin:opentrace:opentrace), so the bridge
+    // never displaces it — the two coexist in local Code-tab sessions.
+    sb.seedClaudeCodeDesktop()
+    const r = await sb.run(["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base])
+    assert.equal(r.code, 0)
+    assert.match(r.output, /second `opentrace` server/)
+  })
+
+  it("skips the connector, with a note, when npx is missing", async () => {
+    // The bridge IS an npx invocation: an entry the app cannot start is worse
+    // than none, because the app lists it as available.
+    sb.seedClaudeApp()
+    const r = await sb.run(["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base], {
+      // Node is launched by absolute path, so an empty PATH costs the child
+      // nothing but the npx lookup.
+      env: { PATH: path.join(sb.home, "no-such-bin") },
+    })
+    assert.equal(r.code, 0)
+    assert.match(r.output, /isn't on PATH/)
+    assert.equal(fs.existsSync(sb.claudeDesktopConfigPath()), false)
   })
 
   it("preserves the app's other settings in that file", async () => {
@@ -188,7 +236,16 @@ describe("install and Claude Code Desktop", () => {
   it("writes nothing extra on a machine without the desktop app", async () => {
     const r = await sb.run(["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base])
     assert.equal(r.code, 0)
-    assert.doesNotMatch(r.stdout, /Claude Code Desktop \(connector\)/)
+    assert.doesNotMatch(r.stdout, /chat connector/)
+    assert.equal(fs.existsSync(sb.claudeDesktopConfigPath()), false)
+  })
+
+  it("does not touch the app when another tool was the one named", async () => {
+    // `--cursor` on a machine that happens to have the Claude app is not a
+    // request to configure the Claude app.
+    sb.seedClaudeApp()
+    const r = await sb.run(["install", sb.project, "-y", "-g", "--cursor", "--api-key", CLI_KEY, ...sb.base])
+    assert.equal(r.code, 0)
     assert.equal(fs.existsSync(sb.claudeDesktopConfigPath()), false)
   })
 })

@@ -49,7 +49,7 @@ It runs an OAuth loopback flow (dynamic client registration + PKCE) against your
 What happens next is the same whether the key was just minted or was already on this machine — and depends only on whether you named a client:
 
 - **No `--client`** (the dashboard's one-liner): the key goes into the full [`otx install` flow](#otx-connect-path--otx-install-path) — Express or Custom, tool detection, scope, usage monitoring. Signing in decides *how* you authenticate, not how little gets set up. The scope question leans towards **All projects** here, since signing in onboards a machine rather than a project.
-- **`--client <id>`**: an explicit narrow instruction, so it behaves exactly like `otx connect otk_…` and configures that one client. This is also the only way to reach **Claude Desktop**, which the key flow supports but `install` does not.
+- **`--client <id>`**: an explicit narrow instruction, so it behaves exactly like `otx connect otk_…` and configures that one client — including `claude-desktop` on its own, without the rest of the onboarding (`install` reaches it too, but only alongside Claude Code).
 
 **Options:** `--client <id>`, `--base-url <url>`, `--url <url>`, `--no-browser`, `--express`, `--track-usage` / `--no-track-usage`, `-g, --global`, `-y, --yes`.
 
@@ -108,7 +108,7 @@ Interactive by default. The first question is how much you want to be asked:
 | **Express** (recommended) | Signs you in with your browser, then sets up **every detected tool** for **all projects** with **usage monitoring on**. Nothing else is asked. |
 | **Custom** | The full wizard below. |
 
-Express prints exactly what it is about to do — the tools, the scope, the sign-in, and what the usage export carries — before it does any of it. `--express` states the choice up front (including for automation); per-tool flags are already a custom answer, so they skip the question. If nothing is detected there is nothing to be express about, and it falls back to Custom so you can pick.
+Express prints exactly what it is about to do — the tools, the scope, the sign-in, the Claude desktop app's chat surface if that app is installed, and what the usage export carries — before it does any of it. `--express` states the choice up front (including for automation); per-tool flags are already a custom answer, so they skip the question. If nothing is detected there is nothing to be express about, and it falls back to Custom so you can pick.
 
 Custom asks four things, each skippable with a flag:
 
@@ -118,6 +118,8 @@ Custom asks four things, each skippable with a flag:
 4. **Usage monitoring** — monitor your Claude Code usage in OpenTrace, and at which level (`--track-usage` / `--no-track-usage`); see [Usage monitoring](#usage-monitoring-claude-code-telemetry)
 
 A pasted key is shape-checked, then confirmed with an MCP handshake before anything is written; a key this machine already holds (OS keychain, or the plugin token file) is revalidated and reused without asking. Keys are always written **user-scoped**, even when you pick project scope, so a bearer token never lands in a committable file. Tools with no API-key mechanism get the headerless MCP entry and are called out in the summary.
+
+**The Claude desktop app.** When Claude Code is being set up, a key is in hand and the Claude app is installed, the flow also writes the `mcp-remote` connector into `claude_desktop_config.json`. That reaches the app's **chat** surface: its config file takes stdio servers only, so the bridge is the only route a local command can write (the alternative — adding OpenTrace as a custom connector by URL — lives in your claude.ai account, not on disk). The **Code** tab needs nothing extra, since it shares `~/.claude` with the CLI. Express announces it in its plan; Custom asks; `-y` writes it. Two consequences, both reported in the summary: the connector runs through `npx` (missing npx means it is skipped, not written broken), and because a plugin's MCP server is scoped (`plugin:opentrace:opentrace`) the connector never replaces it — local Code-tab sessions list OpenTrace twice. Quit and relaunch the app to pick the connector up.
 
 ```bash
 otx connect                    # prompt: Express or Custom
@@ -256,7 +258,7 @@ otx detects the app, so a machine that has only the desktop app is set up rather
 Two things behave differently enough to be worth knowing:
 
 - **A running session won't pick up a change.** Config is read when a session starts, so restarting the app is not enough — start a **new** session. otx says so in the summary when it sees the desktop app.
-- **`claude_desktop_config.json` wins in the Code tab.** The desktop app also loads MCP servers from the chat surface's `claude_desktop_config.json` into local Code-tab sessions, and on a name collision that definition takes precedence over `~/.claude.json` / `.mcp.json`. Since `otx connect --client claude-desktop` writes the `mcp-remote` stdio bridge there (Desktop chat accepts nothing else), setting up **both** clients leaves Code-tab sessions using the npx bridge instead of the native HTTP mount. otx warns when this applies; remove the `opentrace` entry from `claude_desktop_config.json` if you'd rather Code sessions used the direct endpoint.
+- **The Code tab sees the chat surface's servers too — as extras, not replacements.** The desktop app loads MCP servers from `claude_desktop_config.json` into local Code-tab sessions (it passes them to the engine with `--mcp-config`). The documented name-collision rule, where that file takes precedence over `~/.claude.json` / `.mcp.json`, does **not** apply to our plugin: a plugin's server registers under the scoped name `plugin:opentrace:opentrace`, while the bridge is a bare `opentrace`, so the two coexist and such sessions list OpenTrace twice — one native HTTP mount, one npx bridge. Harmless but duplicated; otx says so, and removing the `opentrace` entry from `claude_desktop_config.json` leaves the Code tab on the plugin alone (at the cost of the chat surface).
 
 Not covered: **Cowork** and **cloud** sessions source their skills, plugins and connectors from your claude.ai account rather than `~/.claude`, so a local otx run does not reach them.
 

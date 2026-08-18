@@ -1,13 +1,18 @@
 {
   "name": "opentrace",
+  "description": "Official OpenTrace plugins for Claude Code. OpenTrace indexes your organization's repositories into code graphs and serves them over a hosted MCP server, so Claude can answer architecture, dependency, and code-structure questions across every indexed repository — not only the checkout in front of it.",
   "owner": {
-    "name": "OpenTrace"
+    "name": "OpenTrace",
+    "url": "https://opentrace.ai"
   },
   "plugins": [
     {
       "name": "opentrace",
+      "displayName": "OpenTrace",
       "source": "./plugins/claude-code",
-      "description": "Query your organization's indexed code graphs through the OpenTrace dynamic MCP server"
+      "description": "Query your organization's indexed code graphs — cross-repository symbol search, dependency and subgraph exploration, bounded source reads, and the pull requests and issues around the code — through the hosted OpenTrace MCP server.",
+      "homepage": "https://docs.opentrace.com",
+      "category": "development"
     }
   ]
 }
