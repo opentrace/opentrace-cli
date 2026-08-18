@@ -8,6 +8,7 @@ A thin wrapper around the hosted OpenTrace **dynamic MCP server** (`https://api.
 - **`bin/prewarm.cjs`** — resolves the current checkout against OpenTrace at session start (see "Context prewarm" below).
 - **`hooks/session-start.sh`** — injects a ready-to-use binding for the current checkout (environment/workspace slugs, `source_id`, indexed commit, freshness vs. your HEAD) plus routing guidance, so the model's first OpenTrace call needs no discovery hops. Falls back to static workflow guidance when prewarm can't run.
 - **`hooks/user-prompt-submit.sh`** — when a prompt looks like an architecture, dependency, existence, or structure question, reminds the model that the graph tools can answer it — including the exact prewarmed parameters for this checkout when available. Silent (`{}`) otherwise.
+- **`skills/setup/SKILL.md`** — `/opentrace:setup`, and model-invoked when the tools are missing or a call fails to authenticate. Walks the user from an unconnected server through sign-in to a verified tool call, and distinguishes the failure that looks like a broken plugin but isn't: valid credentials against an account with nothing indexed.
 
 ## Context prewarm
 

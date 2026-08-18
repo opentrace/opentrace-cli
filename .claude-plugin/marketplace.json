@@ -12,8 +12,7 @@
       "source": "./plugins/claude-code",
       "description": "Query your organization's indexed code graphs — cross-repository symbol search, dependency and subgraph exploration, bounded source reads, and the pull requests and issues around the code — through the hosted OpenTrace MCP server.",
       "homepage": "https://docs.opentrace.com",
-      "category": "code-intelligence",
-      "tags": ["code-graph", "knowledge-graph", "mcp", "architecture", "dependencies", "code-search"]
+      "category": "development"
     }
   ]
 }
