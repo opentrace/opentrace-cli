@@ -2,7 +2,7 @@ import path from "node:path"
 import fs from "node:fs"
 import { checkbox, confirm, password, select } from "@inquirer/prompts"
 import { ALL_INTEGRATIONS, detectInstalled, integrationsFromFlags } from "../util/detect.js"
-import { DEFAULT_BASE_URL, buildMcpUrl, buildIngestUrl, pluginId } from "../util/constants.js"
+import { DEFAULT_BASE_URL, MARKETPLACE_REPO, buildIngestUrl, buildMcpUrl, pluginId } from "../util/constants.js"
 import { isInteractive } from "../util/tty.js"
 import { maskToken, validateTokenShape } from "../util/token.js"
 import { probeMcp } from "../util/mcp-probe.js"
@@ -592,6 +592,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   let pluginInstalled = false
   /** Set when the declaration landed but the plugin could not be installed for the user. */
   let pluginNeedsInstall = false
+  let pluginInstallError: string | undefined
   let attachedKey: ResolvedKey | undefined
   /** Tools left authenticating with OAuth — they still need a sign-in step. */
   const oauthTargets: string[] = []
@@ -631,6 +632,10 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
           results.push({ label: `${integration.label} (plugin install)`, configPath: "Claude Code plugin list", status: "added" })
         } else if (!ensured.installed) {
           pluginNeedsInstall = true
+          // Say why. Reporting only the command to run left the user to rediscover
+          // the failure themselves — and when the cause was an unregistered
+          // marketplace, that command failed the same way.
+          pluginInstallError = ensured.error
         }
 
         if (key) {
@@ -746,7 +751,11 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     notes.push("Claude Code Desktop: start a new session to pick this up.")
   }
   if (pluginNeedsInstall) {
-    notes.push(`Run \`claude plugin install ${pluginId()}\` to finish installing the plugin.`)
+    const why = pluginInstallError ? ` (${pluginInstallError})` : ""
+    notes.push(
+      `Could not finish installing the plugin${why}. Run: ` +
+        `claude plugin marketplace add ${MARKETPLACE_REPO} && claude plugin install ${pluginId()}`,
+    )
   }
 
   if (results.length === 0) return
@@ -761,7 +770,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   }
 
   console.log()
-  console.log(`  Endpoint:  ${mcpUrl}`)
+  console.log(`  Endpoint:  ${mcpUrl.replace(/\/+$/, "")}`)
   if (attachedKey) console.log(`  CLI key:   ${maskToken(attachedKey.token)}`)
   if (telemetry.plan) console.log(`  Usage:     ${buildIngestUrl(baseUrl)}`)
 
