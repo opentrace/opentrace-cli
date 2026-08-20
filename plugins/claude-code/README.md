@@ -37,28 +37,48 @@ Details:
 | `graph_get_repo_overview` | Repository overview for a `source_id` |
 | `graph_search` | Search a workspace graph for symbols, files, dependencies |
 | `graph_explore_focused_subgraph` | Explore the graph neighborhood around one symbol |
+| `graph_search_source_files` | Find files by path or name within an indexed source |
+| `graph_search_source_regions` | Search source text — string literals, error messages, config keys |
 | `source_load` | Load bounded source text for a `load_ref` from graph results |
 | `source_get_context` | Remote-head / latest-commit freshness context for a source |
+| `source_history` | Recent commits for a source or path, each with the change request it landed through |
+| `source_blame` | Who last touched given lines, and in which commit |
 | `change_requests_list` | List GitHub PRs / GitLab MRs |
 | `change_requests_search` | Search GitHub PRs / GitLab MRs |
 | `change_requests_read` | Bounded detail for one change request (files, commits, discussions, reviews, checks) |
+| `issues_list` | List GitHub / GitLab issues |
+| `issues_search` | Search GitHub / GitLab issues |
+| `issues_read` | Bounded detail for one issue |
 
 The tool inventory lives server-side (`opentrace-api`) — the server advertises the authoritative set and usage instructions on connect, so new tools appear without a plugin update. This table is a convenience snapshot; treat the server as the source of truth.
 
 ## Install
 
+Install the plugin and its marketplace in one line:
+
 ```bash
-# From this repo (local path)
-claude plugin install ./plugins/claude-code
-
-# From git
-claude plugin install github:opentrace/opentrace-cli?path=plugins/claude-code
-
-# From npm (once published)
-claude plugin install @opentrace/claude-code-plugin
+claude plugin marketplace add opentrace/opentrace-cli && claude plugin install opentrace@opentrace
 ```
 
-Pointing at a different API (dev/local): the plugin exposes an `mcp_url` config option (default `https://api.opentrace.ai/mcp/v1`). Claude Code prompts for it when the plugin is enabled — set it to e.g. `https://api.dev.opentrace.ai/mcp/v1` or `http://localhost:8000/mcp/v1`. (It's a per-user setting, stored in user settings.)
+Or let the OpenTrace CLI do the whole setup — plugin, MCP registration and sign-in together:
+
+```bash
+npx -y @opentrace/cli@latest login
+```
+
+For local development against a checkout of this repo, load the plugin without installing it:
+
+```bash
+claude --plugin-dir ./plugins/claude-code
+```
+
+Pointing at a different API (dev/local): the plugin exposes an `mcp_url` config option (default `https://api.opentrace.ai/mcp/v1`). Set it at install time:
+
+```bash
+claude plugin install opentrace@opentrace --config mcp_url=https://api.dev.opentrace.ai/mcp/v1
+```
+
+Otherwise Claude Code prompts for it, or you can set it later with `/plugin configure opentrace@opentrace`. It's a per-user setting, stored in user settings.
 
 ## Privacy Policy
 

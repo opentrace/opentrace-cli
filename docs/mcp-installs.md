@@ -1,7 +1,7 @@
 # MCP Server Installation — Tool Reference
 
 How to configure the OpenTrace MCP server across every major AI coding tool.
-The HTTP endpoint is `https://api.opentrace.ai/mcp/v1/`.
+The HTTP endpoint is `https://api.opentrace.ai/mcp/v1`.
 
 ---
 
@@ -30,7 +30,7 @@ The HTTP endpoint is `https://api.opentrace.ai/mcp/v1/`.
   "mcpServers": {
     "opentrace": {
       "type": "http",
-      "url": "https://api.opentrace.ai/mcp/v1/"
+      "url": "https://api.opentrace.ai/mcp/v1"
     }
   }
 }
@@ -42,10 +42,10 @@ The HTTP endpoint is `https://api.opentrace.ai/mcp/v1/`.
 
 ```bash
 # Project scope
-claude mcp add --transport http opentrace https://api.opentrace.ai/mcp/v1/ --scope project
+claude mcp add --transport http opentrace https://api.opentrace.ai/mcp/v1 --scope project
 
 # User scope
-claude mcp add --transport http opentrace https://api.opentrace.ai/mcp/v1/ --scope user
+claude mcp add --transport http opentrace https://api.opentrace.ai/mcp/v1 --scope user
 ```
 
 Restart Claude Code to activate.
@@ -62,7 +62,7 @@ Restart Claude Code to activate.
   "mcpServers": {
     "opentrace": {
       "type": "http",
-      "url": "https://api.opentrace.ai/mcp/v1/"
+      "url": "https://api.opentrace.ai/mcp/v1"
     }
   }
 }
@@ -83,7 +83,7 @@ No CLI — file edit only. Cursor picks up changes without restart in most cases
   "mcpServers": {
     "opentrace": {
       "type": "http",
-      "serverUrl": "https://api.opentrace.ai/mcp/v1/"
+      "serverUrl": "https://api.opentrace.ai/mcp/v1"
     }
   }
 }
@@ -102,7 +102,7 @@ No CLI — file edit only. Cursor picks up changes without restart in most cases
   "servers": {
     "opentrace": {
       "type": "http",
-      "url": "https://api.opentrace.ai/mcp/v1/"
+      "url": "https://api.opentrace.ai/mcp/v1"
     }
   }
 }
@@ -111,7 +111,7 @@ No CLI — file edit only. Cursor picks up changes without restart in most cases
 **Via CLI** (VS Code ≥1.99):
 
 ```bash
-code --add-mcp '{"name":"opentrace","type":"http","url":"https://api.opentrace.ai/mcp/v1/"}'
+code --add-mcp '{"name":"opentrace","type":"http","url":"https://api.opentrace.ai/mcp/v1"}'
 ```
 
 ---
@@ -124,7 +124,7 @@ code --add-mcp '{"name":"opentrace","type":"http","url":"https://api.opentrace.a
 ```yaml
 name: opentrace
 type: http
-url: https://api.opentrace.ai/mcp/v1/
+url: https://api.opentrace.ai/mcp/v1
 ```
 
 **Global config** (`~/.continue/config.yaml`):
@@ -133,7 +133,7 @@ url: https://api.opentrace.ai/mcp/v1/
 mcpServers:
   - name: opentrace
     type: http
-    url: https://api.opentrace.ai/mcp/v1/
+    url: https://api.opentrace.ai/mcp/v1
 ```
 
 The standalone file approach is preferred — drop and forget, no merge conflicts.
@@ -151,7 +151,7 @@ Config location varies by OS:
   "context_servers": {
     "opentrace": {
       "transport": "http",
-      "url": "https://api.opentrace.ai/mcp/v1/"
+      "url": "https://api.opentrace.ai/mcp/v1"
     }
   }
 }
@@ -172,7 +172,7 @@ Config location varies by OS:
   "mcpServers": {
     "opentrace": {
       "type": "http",
-      "url": "https://api.opentrace.ai/mcp/v1/"
+      "url": "https://api.opentrace.ai/mcp/v1"
     }
   }
 }
@@ -197,7 +197,7 @@ Then add to `.vscode/settings.json`:
   "cody.mcpServers": {
     "opentrace": {
       "command": "mcp-remote",
-      "args": ["https://api.opentrace.ai/mcp/v1/"]
+      "args": ["https://api.opentrace.ai/mcp/v1"]
     }
   }
 }
