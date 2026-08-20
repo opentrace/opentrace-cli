@@ -23,6 +23,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { claudeAppDir } from "./claude-app.js"
+import { MARKETPLACE_NAME, MARKETPLACE_REPO } from "./constants.js"
 
 interface InstalledEntry {
   scope?: string
@@ -221,6 +222,12 @@ export function removeInstalledPlugin(
 // ---------------------------------------------------------------------------
 
 /** Is the plugin in the records `/plugin` reads? */
+/** True when the marketplace is in Claude Code's own record, not merely declared. */
+export function marketplaceRegistered(marketplaceName: string): boolean {
+  const known = readJson<Record<string, unknown>>(knownMarketplacesPath())
+  return known !== undefined && marketplaceName in known
+}
+
 export function isPluginInstalled(pluginId: string): boolean {
   const installed = readJson<InstalledPlugins>(installedPluginsPath())
   return Boolean(installed?.plugins && pluginId in installed.plugins)
@@ -277,6 +284,29 @@ export function ensurePluginInstalled(pluginId: string): PluginInstall {
   const bin = findClaudeBinary()
   if (!bin) return { installed: false, alreadyInstalled: false, error: "no `claude` executable found" }
 
+  const lastLine = (r: ReturnType<typeof spawnSync>): string =>
+    (String(r.stderr || "") + String(r.stdout || "")).trim().split("\n").pop() || `exit ${r.status}`
+
+  // Register the marketplace before installing from it. `extraKnownMarketplaces`
+  // in settings.json only DECLARES it — Claude Code turns that into a record in
+  // plugins/known_marketplaces.json when a session starts, and `claude plugin
+  // install` reads the record, not the declaration. Skipping this step made the
+  // install fail with `Plugin "…" not found in marketplace "…"`, and the advice we
+  // printed as a fallback was the same failing command.
+  if (!marketplaceRegistered(MARKETPLACE_NAME)) {
+    const add = spawnSync(bin, ["plugin", "marketplace", "add", MARKETPLACE_REPO], {
+      timeout: 120_000,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+    })
+    if (add.error) {
+      return { installed: false, alreadyInstalled: false, via: bin, error: add.error.message }
+    }
+    if (!marketplaceRegistered(MARKETPLACE_NAME)) {
+      return { installed: false, alreadyInstalled: false, via: bin, error: lastLine(add) }
+    }
+  }
+
   const run = spawnSync(bin, ["plugin", "install", pluginId, "--scope", "user", "-y"], {
     timeout: 120_000,
     stdio: ["ignore", "pipe", "pipe"],
@@ -288,6 +318,5 @@ export function ensurePluginInstalled(pluginId: string): PluginInstall {
   // Trust the records, not the exit code: this is what `/plugin` reads.
   if (isPluginInstalled(pluginId)) return { installed: true, alreadyInstalled: false, via: bin }
 
-  const detail = (run.stderr || run.stdout || "").trim().split("\n").pop() || `exit ${run.status}`
-  return { installed: false, alreadyInstalled: false, via: bin, error: detail }
+  return { installed: false, alreadyInstalled: false, via: bin, error: lastLine(run) }
 }

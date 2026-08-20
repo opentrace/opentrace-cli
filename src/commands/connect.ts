@@ -1,5 +1,5 @@
 import os from "node:os"
-import { normalizeMcpUrl, toBaseUrl, buildIngestUrl, DEFAULT_BASE_URL } from "../util/constants.js"
+import { DEFAULT_BASE_URL, buildIngestUrl, customConnectorUrl, normalizeMcpUrl, toBaseUrl } from "../util/constants.js"
 import { validateTokenShape, maskToken } from "../util/token.js"
 import { probeMcp } from "../util/mcp-probe.js"
 import { isInteractive } from "../util/tty.js"
@@ -7,7 +7,7 @@ import { attachClientKey, attachPluginKey } from "../util/attach-key.js"
 import { resolveTelemetryPlan, writeTelemetryEnv } from "../util/telemetry.js"
 import { cliKeyId, recordKeyVerdict } from "../util/notice-state.js"
 import { hasClaudeCodeDesktop } from "../util/claude-app.js"
-import { findKeyClient, detectKeyClients, KEY_CLIENTS, DEFAULT_KEY_CLIENT } from "../key-clients/index.js"
+import { DEFAULT_KEY_CLIENT, KEY_CLIENTS, detectKeyClients, findKeyClient, writableKeyClients } from "../key-clients/index.js"
 import claudeCode from "../integrations/claude-code.js"
 
 interface ConnectKeyOptions {
@@ -45,9 +45,20 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
   const clientId = opts.client ?? DEFAULT_KEY_CLIENT
   const client = findKeyClient(clientId)
   if (!client) {
-    const ids = KEY_CLIENTS.map((c) => c.id).join(", ")
+    const ids = writableKeyClients().map((c) => c.id).join(", ")
     console.error(`Unknown --client "${clientId}". Supported: ${ids}.`)
     process.exit(1)
+  }
+  if (client.writable === false) {
+    // This used to write an `mcp-remote` bridge carrying the key. The surface it
+    // targets takes account-level connectors instead, which only the user can
+    // confirm — so hand over the link rather than failing on a flag that worked
+    // in an older version.
+    console.log(`${client.label}'s chat surface uses an account-level connector, not a local file.`)
+    console.log(`\n  Add OpenTrace here:\n  ${customConnectorUrl(mcpUrl)}\n`)
+    console.log("You sign in in the browser, so no key is stored on this machine.")
+    console.log("The Claude app's Code tab needs nothing extra — it shares config with the CLI.")
+    return
   }
 
   // 4. Validate the key with a real MCP handshake (the CLI key's home surface).

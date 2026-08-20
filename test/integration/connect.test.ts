@@ -101,29 +101,33 @@ describe("connect otk_… (key flow)", () => {
     assert.equal(hasTelemetry(sb.readSettings("user")), false)
   })
 
-  it("writes a header entry plus a bridge note for Claude Desktop", async () => {
-    // Via the harness, because the app directory is platform-specific — a
-    // hardcoded .config/Claude passes on Linux and tests nothing on macOS.
+  it("hands over the connector link instead of writing a bridge", async () => {
+    // otx used to write an `mcp-remote` stdio bridge here, which put the key in an
+    // npx process's argv. The chat surface takes account-level connectors, so the
+    // link is the whole answer and nothing local is written.
     sb.seedClaudeApp()
     const r = await sb.run(["connect", CLI_KEY, ...url(), "--client", "claude-desktop", "--no-track-usage"])
     assert.equal(r.code, 0)
-    const cfg = JSON.parse(fs.readFileSync(sb.claudeDesktopConfigPath(), "utf8")) as {
-      mcpServers: Record<string, { command: string; args: string[] }>
-    }
-    assert.equal(cfg.mcpServers.opentrace.command, "npx")
-    assert.ok(cfg.mcpServers.opentrace.args.includes("mcp-remote"))
-    assert.match(r.output, /mcp-remote/)
+    assert.match(r.output, /account-level connector/)
+    assert.match(r.output, /claude\.ai\/customize\/connectors\?modal=add-custom-connector/)
+    assert.match(r.output, /connectorUrl=https%3A%2F%2F|connectorUrl=http%3A%2F%2F/)
+    assert.equal(
+      fs.existsSync(sb.claudeDesktopConfigPath()),
+      false,
+      "nothing should be written to the desktop config",
+    )
   })
 
-  it("warns that Code sessions will list the bridge as a second server", async () => {
-    // Only when the Code tab is actually present on the machine. It does not
-    // shadow the plugin's mount — a plugin server is scoped
-    // (plugin:opentrace:opentrace), so the two coexist rather than collide.
-    sb.seedClaudeCodeDesktop()
+  it("never puts the key in a process argument", async () => {
+    // The regression that motivated removing the bridge: `npx -y mcp-remote <url>
+    // --header "Authorization: Bearer otk_…"` is readable via ps and /proc.
+    sb.seedClaudeApp()
     const r = await sb.run(["connect", CLI_KEY, ...url(), "--client", "claude-desktop", "--no-track-usage"])
     assert.equal(r.code, 0)
-    assert.match(r.output, /second `opentrace` server/)
+    assert.doesNotMatch(r.output, /mcp-remote/)
+    assert.doesNotMatch(r.output, new RegExp(CLI_KEY))
   })
+
 })
 
 describe("connect otk_… without a terminal", () => {

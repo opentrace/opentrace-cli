@@ -57,6 +57,12 @@ export function attachClientKey(
   mcpUrl: string,
   token: string,
 ): ClientKeyResult {
+  if (!client.write) {
+    // A removal-only client has no key to attach — callers pick from
+    // writableKeyClients(), so reaching here is a programming error, not a
+    // user-facing state.
+    throw new Error(`${client.label} is no longer configured by otx.`)
+  }
   const { configPath, note } = client.write(mcpUrl, token)
   try {
     storeToken(mcpUrl, token)

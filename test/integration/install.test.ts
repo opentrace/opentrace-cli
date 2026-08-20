@@ -39,15 +39,17 @@ describe("install --express", () => {
     assert.equal(fs.existsSync(path.join(sb.project, ".claude", "settings.json")), false)
   })
 
-  it("announces the chat surface it is about to connect", async () => {
-    // Express writes claude_desktop_config.json when the app is there, and a mode
-    // that asks nothing must not put a key in an unannounced file.
+  it("says nothing about the chat surface — the plugin is what covers desktop", async () => {
+    // The plugin reaches the desktop Code tab through ~/.claude, and that is all
+    // onboarding owes the app. The chat surface is a different product surface,
+    // reached only when asked for by name via `connect --client claude-desktop`.
     sb.seedClaudeApp()
     sb.seedPluginToken(CLI_KEY)
     const r = await sb.run(["install", sb.project, "--express", "-y", ...sb.base])
     assert.equal(r.code, 0)
-    assert.match(r.stdout, /Desktop:\s+the Claude app's chat surface/)
-    assert.match(r.stdout, /Claude Desktop \(chat connector\)/)
+    assert.doesNotMatch(r.stdout, /Desktop:/)
+    assert.doesNotMatch(r.output, /add-custom-connector/)
+    assert.equal(fs.existsSync(sb.claudeDesktopConfigPath()), false)
   })
 
   it("describes the flagged tools, not the detected ones", async () => {
@@ -181,71 +183,73 @@ describe("install finishes the plugin install", () => {
 })
 
 describe("install and the Claude desktop app", () => {
-  // The chat surface has no other route to a remote authenticated MCP server, so
-  // the bridge in claude_desktop_config.json is what reaches it. The Code tab
-  // needs nothing extra — it shares ~/.claude with the CLI — so the gate is the
-  // app being installed, not its Code tab having run.
-  it("writes the connector when only the app is installed", async () => {
+  // The Code tab needs nothing — it shares ~/.claude with the CLI, where the
+  // plugin is already installed. The chat surface (and claude.ai, and mobile) takes
+  // account-level connectors, which no local command can add on the user's behalf,
+  // so otx hands over the prefilled link and writes nothing.
+  it("leaves the chat surface alone entirely, even with the app installed", async () => {
+    // The happy path is the plugin, which already covers the Code tab. Onboarding
+    // neither writes to nor advertises the chat surface.
     sb.seedClaudeApp() // the Code tab has never run
     const r = await sb.run(["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base])
     assert.equal(r.code, 0)
-    const cfg = JSON.parse(fs.readFileSync(sb.claudeDesktopConfigPath(), "utf8")) as {
-      mcpServers: Record<string, { command: string }>
-    }
-    assert.equal(cfg.mcpServers.opentrace.command, "npx")
-    assert.match(r.stdout, /Claude Desktop \(chat connector\)/)
-    assert.match(r.output, /Quit and relaunch/)
+    assert.doesNotMatch(r.output, /add-custom-connector/)
+    assert.equal(
+      fs.existsSync(sb.claudeDesktopConfigPath()),
+      false,
+      "the chat surface is not a file we write",
+    )
   })
 
-  it("says the Code tab will list OpenTrace twice, and why", async () => {
-    // A plugin's server is scoped (plugin:opentrace:opentrace), so the bridge
-    // never displaces it — the two coexist in local Code-tab sessions.
-    sb.seedClaudeCodeDesktop()
+  it("never writes the key into an npx argument", async () => {
+    // Why the bridge went: `npx -y mcp-remote <url> --header "Authorization:
+    // Bearer otk_…"` exposed the key to any local process via ps or /proc.
+    sb.seedClaudeApp()
     const r = await sb.run(["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base])
     assert.equal(r.code, 0)
-    assert.match(r.output, /second `opentrace` server/)
+    assert.doesNotMatch(r.output, /mcp-remote/)
+    assert.doesNotMatch(r.output, new RegExp(CLI_KEY))
   })
 
-  it("skips the connector, with a note, when npx is missing", async () => {
-    // The bridge IS an npx invocation: an entry the app cannot start is worse
-    // than none, because the app lists it as available.
+  it("removes a bridge left by an older otx, and says why", async () => {
+    // Migration: that entry is a live stdio server still holding a key, so it goes
+    // rather than sitting beside the connector we now recommend.
     sb.seedClaudeApp()
-    const r = await sb.run(["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base], {
-      // Node is launched by absolute path, so an empty PATH costs the child
-      // nothing but the npx lookup.
-      env: { PATH: path.join(sb.home, "no-such-bin") },
-    })
-    assert.equal(r.code, 0)
-    assert.match(r.output, /isn't on PATH/)
-    assert.equal(fs.existsSync(sb.claudeDesktopConfigPath()), false)
-  })
-
-  it("preserves the app's other settings in that file", async () => {
-    // It doubles as the app's preferences store, so a clobber would reset panes
-    // and Cowork paths.
-    sb.seedClaudeCodeDesktop()
     fs.mkdirSync(sb.claudeAppDir(), { recursive: true })
-    fs.writeFileSync(sb.claudeDesktopConfigPath(), JSON.stringify({ coworkUserFilesPath: "/keep/me", preferences: { sidebarMode: "chat" } }))
-    await sb.run(["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base])
+    fs.writeFileSync(
+      sb.claudeDesktopConfigPath(),
+      JSON.stringify({
+        coworkUserFilesPath: "/keep/me",
+        mcpServers: {
+          opentrace: { command: "npx", args: ["-y", "mcp-remote", "https://old.test/mcp/v1/", "--header", `Authorization: Bearer ${CLI_KEY}`] },
+          somethingElse: { command: "node", args: ["other.js"] },
+        },
+      }),
+    )
+    const r = await sb.run(["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base])
+    assert.equal(r.code, 0)
+    assert.match(r.output, /Removed the old .?mcp-remote.? bridge/)
     const cfg = JSON.parse(fs.readFileSync(sb.claudeDesktopConfigPath(), "utf8")) as Record<string, any>
+    assert.equal(cfg.mcpServers?.opentrace, undefined, "our entry is gone")
+    // It doubles as the app's preferences store, so everything else stays put.
     assert.equal(cfg.coworkUserFilesPath, "/keep/me")
-    assert.equal(cfg.preferences?.sidebarMode, "chat")
-    assert.ok(cfg.mcpServers?.opentrace)
+    assert.ok(cfg.mcpServers?.somethingElse, "another server's entry is not ours to remove")
   })
 
   it("writes nothing extra on a machine without the desktop app", async () => {
     const r = await sb.run(["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base])
     assert.equal(r.code, 0)
-    assert.doesNotMatch(r.stdout, /chat connector/)
+    assert.doesNotMatch(r.output, /add-custom-connector/)
     assert.equal(fs.existsSync(sb.claudeDesktopConfigPath()), false)
   })
 
-  it("does not touch the app when another tool was the one named", async () => {
+  it("does not mention the app when another tool was the one named", async () => {
     // `--cursor` on a machine that happens to have the Claude app is not a
     // request to configure the Claude app.
     sb.seedClaudeApp()
     const r = await sb.run(["install", sb.project, "-y", "-g", "--cursor", "--api-key", CLI_KEY, ...sb.base])
     assert.equal(r.code, 0)
+    assert.doesNotMatch(r.output, /add-custom-connector/)
     assert.equal(fs.existsSync(sb.claudeDesktopConfigPath()), false)
   })
 })
