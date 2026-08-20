@@ -20,12 +20,20 @@ export interface KeyClientRemoveResult {
 export interface KeyClient {
   id: string
   label: string
+  /**
+   * False for a client otx no longer configures but must still clean up after.
+   * The Claude app's chat surface is the case: otx used to write an `mcp-remote`
+   * stdio bridge into `claude_desktop_config.json`, and that entry is still on
+   * users' machines, so `remove()` has to keep working long after `write()` went
+   * away. Defaults to writable when absent.
+   */
+  writable?: boolean
   /** True if this client appears installed on the machine. */
   detect(): boolean
   /** Absolute path of the config file this client writes to. */
   configPath(): string
-  /** Write/replace the OpenTrace MCP entry carrying the bearer token. `mcpUrl` ends in /mcp/v1/. */
-  write(mcpUrl: string, token: string): KeyClientResult
+  /** Write/replace the OpenTrace MCP entry carrying the bearer token. `mcpUrl` ends in /mcp/v1/. Absent when `writable` is false. */
+  write?(mcpUrl: string, token: string): KeyClientResult
   /** Remove the OpenTrace MCP entry from this client's config. Returns the URL it carried, if any. */
   remove(): KeyClientRemoveResult
 }

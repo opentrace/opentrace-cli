@@ -16,7 +16,12 @@ export function findKeyClient(id: string): KeyClient | undefined {
 }
 
 export function detectKeyClients(): KeyClient[] {
-  return KEY_CLIENTS.filter((c) => c.detect())
+  return KEY_CLIENTS.filter((c) => c.detect() && c.writable !== false)
+}
+
+/** Clients a key can still be attached to — everything except removal-only ones. */
+export function writableKeyClients(): KeyClient[] {
+  return KEY_CLIENTS.filter((c) => c.writable !== false)
 }
 
 /**

@@ -2,7 +2,7 @@ import path from "node:path"
 import fs from "node:fs"
 import { checkbox, confirm, password, select } from "@inquirer/prompts"
 import { ALL_INTEGRATIONS, detectInstalled, integrationsFromFlags } from "../util/detect.js"
-import { DEFAULT_BASE_URL, MARKETPLACE_REPO, buildIngestUrl, buildMcpUrl, pluginId } from "../util/constants.js"
+import { DEFAULT_BASE_URL, MARKETPLACE_REPO, buildIngestUrl, buildMcpUrl, customConnectorUrl, pluginId } from "../util/constants.js"
 import { isInteractive } from "../util/tty.js"
 import { maskToken, validateTokenShape } from "../util/token.js"
 import { probeMcp } from "../util/mcp-probe.js"
@@ -16,7 +16,6 @@ import { looksHeadless } from "../util/oauth/browser.js"
 import { claudeCodeSurfaces, hasClaudeCodeDesktop, isClaudeAppInstalled } from "../util/claude-app.js"
 import { ensurePluginInstalled } from "../util/claude-plugins.js"
 import { findKeyClient, hasKeyClientEntry } from "../key-clients/index.js"
-import { npxAvailable } from "../key-clients/claude-desktop.js"
 import type { Integration } from "../integrations/types.js"
 
 interface InstallCommandOptions {
@@ -435,7 +434,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
       // Its other prerequisite is a key, which the sign-in line below is already
       // honest about.
       if (isClaudeAppInstalled() && planTargets.some((i) => i.id === "claude-code")) {
-        console.log("  • Desktop: the Claude app's chat surface too, once signed in")
+        console.log("  • Desktop: a link to connect the Claude app's chat surface (nothing written)")
       }
       // Only promise the sign-in this run can actually perform: `--express -y`
       // and `--express` in CI have no browser to open, and the key step falls
@@ -527,46 +526,32 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     targetsClaudeCode: targets.some((i) => i.id === "claude-code"),
   })
 
-  // 6. The Claude desktop app's CHAT surface — the one surface a Claude Code
-  //    setup does not already reach. Its config file takes stdio servers only, so
-  //    the `mcp-remote` bridge is the only route a local command can write; the
-  //    alternative, a custom connector added by URL, lives in the claude.ai
-  //    account and is nothing a CLI can do on the user's behalf.
+  // 6. The Claude desktop app's CHAT surface (and claude.ai, and mobile — one
+  //    account-level connector list serves all three). Not a file we write.
   //
-  //    Gated on the app being installed rather than on its Code tab having run:
-  //    the Code tab shares ~/.claude, where the plugin is already installed, so
-  //    it needs nothing from us — the chat surface is what earns this write.
-  //    Gating it the other way round asked for the cost and skipped the benefit.
+  //    otx used to write an `mcp-remote` stdio bridge into
+  //    claude_desktop_config.json here. That put the raw key in an npx process's
+  //    argv, needed Node on PATH, and made local Code-tab sessions list OpenTrace
+  //    twice. A custom connector reaches the same surface over OAuth with none of
+  //    that, so we print the prefilled link and let the user confirm it — which is
+  //    the only way an account-level connector can be added anyway.
   //
-  //    The cost is a duplicate, not a downgrade: the app injects these servers
-  //    into local Code-tab sessions too, and a plugin's server is scoped
-  //    (`plugin:opentrace:opentrace`), so the bridge never replaces it — such
-  //    sessions list OpenTrace twice. Reported in the notes rather than hidden.
-  //
-  //    Decided here, with the other prompts, so nothing asks a question after the
-  //    first file has been written.
-  const desktopClient =
-    key && isClaudeAppInstalled() && targets.some((i) => i.id === "claude-code")
-      ? findKeyClient("claude-desktop")
-      : undefined
-  let desktopPlanned = desktopClient !== undefined
-  let desktopSkipNote: string | undefined
-  if (desktopClient) {
-    if (!npxAvailable()) {
-      // A bridge entry without npx is a connector that fails to start — worse
-      // than absent, since the app lists it as available.
-      desktopPlanned = false
-      desktopSkipNote =
-        "Claude Desktop: skipped — the connector runs through `npx`, which isn't on PATH. " +
-        "Install Node, then run `otx connect --client claude-desktop`."
-    } else if (interactive && !express) {
-      // Custom asks, because this is a different product surface from the tools
-      // in the list and the key lands in a file none of the answers so far named.
-      // Express does not ask — it announced this in its plan instead.
-      desktopPlanned = await confirm({
-        message: "Also connect the Claude app's chat surface? (writes claude_desktop_config.json)",
-        default: true,
-      })
+  //    The Code tab needs nothing either way: it shares ~/.claude, where the
+  //    plugin is already installed.
+  const showConnectorLink = isClaudeAppInstalled() && targets.some((i) => i.id === "claude-code")
+
+  // A bridge from an older otx is still a live stdio server holding a key, so
+  // take it out rather than leaving it beside the connector we now recommend.
+  let staleBridge: string | undefined
+  {
+    const legacy = findKeyClient("claude-desktop")
+    if (legacy && hasKeyClientEntry(legacy)) {
+      try {
+        const removed = legacy.remove()
+        if (removed.removed) staleBridge = removed.configPath
+      } catch {
+        /* leave it rather than fail onboarding over a cleanup */
+      }
     }
   }
 
@@ -724,23 +709,17 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   }
 
   // Apply the chat-surface decision made above (see step 6).
-  if (desktopSkipNote) notes.push(desktopSkipNote)
-  if (desktopClient && desktopPlanned && key) {
-    try {
-      const hadEntry = hasKeyClientEntry(desktopClient)
-      const attached = attachClientKey(desktopClient, mcpUrl, key.token)
-      results.push({
-        label: "Claude Desktop (chat connector)",
-        configPath: attached.configPath,
-        status: hadEntry ? "updated" : "added",
-      })
-      // The client's own note carries the npx and duplicate-server caveats, which
-      // this block used to drop on the floor.
-      if (attached.note) notes.push(`Claude Desktop: ${attached.note}`)
-      notes.push("Quit and relaunch the Claude app for the connector to appear — a new session is not enough.")
-    } catch (err) {
-      console.error(`  Claude Desktop (chat connector): failed — ${err instanceof Error ? err.message : String(err)}`)
-    }
+  if (staleBridge) {
+    notes.push(
+      `Removed the old \`mcp-remote\` bridge from ${staleBridge} — it carried your key in a ` +
+        "process argument. Use the connector link below instead.",
+    )
+  }
+  if (showConnectorLink) {
+    notes.push(
+      "Claude app chat, claude.ai and mobile use account-level connectors, not local config. " +
+        `Add OpenTrace once, here:\n  ${customConnectorUrl(mcpUrl)}`,
+    )
   }
 
   // Config is read when a session starts, so a running one never notices. This
