@@ -216,3 +216,114 @@ describe("removeInstalledPlugin", () => {
     assert.ok(fs.existsSync(path.join(dataDir, "state.json")), "data is never deleted")
   })
 })
+
+// Installing the plugin for real, not just declaring it.
+//
+// `extraKnownMarketplaces` in settings.json only DECLARES the marketplace;
+// Claude Code turns that into a record in plugins/known_marketplaces.json when a
+// session starts. `claude plugin install` reads the record. Skipping the
+// registration step made the install fail with `Plugin "…" not found in
+// marketplace "…"` — and the fallback command otx printed failed identically, so
+// onboarding reported success while `/plugin` stayed empty.
+describe("ensurePluginInstalled", () => {
+  let savedPath: string | undefined
+  let bin: string
+
+  /**
+   * A stand-in `claude` on PATH that records its argv and writes the records the
+   * real one would. Hermetic: the real binary would clone the marketplace over
+   * the network.
+   */
+  function stubClaude(opts: { registerOnAdd?: boolean; installOnInstall?: boolean } = {}): void {
+    const { registerOnAdd = true, installOnInstall = true } = opts
+    bin = fs.mkdtempSync(path.join(os.tmpdir(), "otx-bin-"))
+    const known = path.join(home, ".claude", "plugins", "known_marketplaces.json")
+    const installed = path.join(home, ".claude", "plugins", "installed_plugins.json")
+    const log = path.join(bin, "argv.log")
+    fs.writeFileSync(
+      path.join(bin, "claude"),
+      `#!/usr/bin/env bash
+echo "$@" >> ${JSON.stringify(log)}
+case "$1 $2" in
+  "--version "*|"--version") echo "0.0.0-stub"; exit 0 ;;
+esac
+if [ "$1" = "plugin" ] && [ "$2" = "marketplace" ] && [ "$3" = "add" ]; then
+  ${registerOnAdd ? `printf '{"opentrace":{"installLocation":"/tmp/none"}}' > ${JSON.stringify(known)}` : 'echo "clone failed" >&2'}
+  exit ${registerOnAdd ? 0 : 1}
+fi
+if [ "$1" = "plugin" ] && [ "$2" = "install" ]; then
+  ${installOnInstall ? `printf '{"version":2,"plugins":{"opentrace@opentrace":[{"scope":"user","version":"9.9.9"}]}}' > ${JSON.stringify(installed)}` : 'echo "Plugin \\"opentrace\\" not found in marketplace \\"opentrace\\"." >&2'}
+  exit ${installOnInstall ? 0 : 1}
+fi
+exit 0
+`,
+      { mode: 0o755 },
+    )
+    savedPath = process.env.PATH
+    process.env.PATH = `${bin}:${process.env.PATH ?? ""}`
+  }
+
+  afterEach(() => {
+    if (savedPath !== undefined) process.env.PATH = savedPath
+    savedPath = undefined
+    if (bin) fs.rmSync(bin, { recursive: true, force: true })
+  })
+
+  const argv = (): string[] =>
+    fs.readFileSync(path.join(bin, "argv.log"), "utf8").trim().split("\n").filter(Boolean)
+
+  async function load() {
+    return import(`../../src/util/claude-plugins.js?${Math.random()}`)
+  }
+
+  it("registers the marketplace before installing from it", async () => {
+    stubClaude()
+    const m = await load()
+    const r = m.ensurePluginInstalled("opentrace@opentrace")
+    assert.equal(r.installed, true, "the plugin should end up in Claude Code's records")
+    assert.equal(r.alreadyInstalled, false)
+
+    const calls = argv().filter((l) => !l.startsWith("--version"))
+    assert.ok(
+      calls[0]?.startsWith("plugin marketplace add"),
+      `marketplace add must come first, got: ${calls.join(" | ")}`,
+    )
+    assert.ok(
+      calls.some((c) => c.startsWith("plugin install opentrace@opentrace")),
+      "the install must still run",
+    )
+  })
+
+  it("skips registration when the marketplace is already recorded", async () => {
+    fs.writeFileSync(
+      path.join(home, ".claude", "plugins", "known_marketplaces.json"),
+      JSON.stringify({ opentrace: { installLocation: "/tmp/none" } }),
+    )
+    stubClaude()
+    const m = await load()
+    assert.equal(m.ensurePluginInstalled("opentrace@opentrace").installed, true)
+    assert.ok(
+      !argv().some((c) => c.startsWith("plugin marketplace add")),
+      "an already-registered marketplace must not be re-added",
+    )
+  })
+
+  it("reports why it failed instead of claiming success", async () => {
+    stubClaude({ installOnInstall: false })
+    const m = await load()
+    const r = m.ensurePluginInstalled("opentrace@opentrace")
+    assert.equal(r.installed, false)
+    assert.match(String(r.error), /not found in marketplace/)
+  })
+
+  it("stops at a failed marketplace add rather than installing blind", async () => {
+    stubClaude({ registerOnAdd: false })
+    const m = await load()
+    const r = m.ensurePluginInstalled("opentrace@opentrace")
+    assert.equal(r.installed, false)
+    assert.ok(
+      !argv().some((c) => c.startsWith("plugin install")),
+      "no point installing from a marketplace that was never registered",
+    )
+  })
+})

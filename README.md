@@ -119,7 +119,7 @@ Custom asks four things, each skippable with a flag:
 
 A pasted key is shape-checked, then confirmed with an MCP handshake before anything is written; a key this machine already holds (OS keychain, or the plugin token file) is revalidated and reused without asking. Keys are always written **user-scoped**, even when you pick project scope, so a bearer token never lands in a committable file. Tools with no API-key mechanism get the headerless MCP entry and are called out in the summary.
 
-**The Claude desktop app.** When Claude Code is being set up, a key is in hand and the Claude app is installed, the flow also writes the `mcp-remote` connector into `claude_desktop_config.json`. That reaches the app's **chat** surface: its config file takes stdio servers only, so the bridge is the only route a local command can write (the alternative — adding OpenTrace as a custom connector by URL — lives in your claude.ai account, not on disk). The **Code** tab needs nothing extra, since it shares `~/.claude` with the CLI. Express announces it in its plan; Custom asks; `-y` writes it. Two consequences, both reported in the summary: the connector runs through `npx` (missing npx means it is skipped, not written broken), and because a plugin's MCP server is scoped (`plugin:opentrace:opentrace`) the connector never replaces it — local Code-tab sessions list OpenTrace twice. Quit and relaunch the app to pick the connector up.
+**The Claude desktop app.** Covered by the plugin, with nothing extra to do: the **Code** tab shares `~/.claude` with the CLI, so the plugin installed above reaches it (start a new session, not just a relaunch). Onboarding stops there — the app's **chat** surface is a different product surface, so `install` neither writes to nor mentions it. If you do want OpenTrace in desktop chat (or claude.ai, or mobile), ask for it by name with `otx connect --client claude-desktop`, which prints a prefilled `add-custom-connector` link for your claude.ai account. Earlier versions wrote an `mcp-remote` stdio bridge into `claude_desktop_config.json`; that put your key in an npx process's argv (readable via `ps`), needed Node on PATH, and made Code-tab sessions list OpenTrace twice. otx removes such an entry when it finds one.
 
 ```bash
 otx connect                    # prompt: Express or Custom
@@ -180,24 +180,6 @@ The usage key itself stays valid server-side; removing the block just stops anyt
 The CLI key goes into a **user-scoped** file in your home directory (never a committed project file), locked to `0600`.
 
 - **Claude Code** — installs the plugin and attaches the key. The endpoint is seeded as the plugin's `mcp_url` (`pluginConfigs` in `~/.claude/settings.json`) and the key is written to `~/.claude/opentrace-plugin.token`. The plugin's `.mcp.json` carries a `headersHelper` (`bin/auth-headers.cjs`) that emits `Authorization: Bearer <key>` when that file exists, and nothing (→ OAuth) when it doesn't:
-  ```json
-  { "mcpServers": { "opentrace": {
-    "type": "http",
-    "url": "${user_config.mcp_url}",
-    "headersHelper": "node \"${CLAUDE_PLUGIN_ROOT}/bin/auth-headers.cjs\""
-  } } }
-  ```
-- **Cursor** — `~/.cursor/mcp.json`, direct header entry + OS keychain:
-  ```json
-  { "mcpServers": { "opentrace": { "url": "https://<host>/mcp/v1/", "headers": { "Authorization": "Bearer otk_…" } } } }
-  ```
-- **Claude Desktop** — `claude_desktop_config.json`. Desktop has no native remote-HTTP-with-headers support, so otx wires it through the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) stdio bridge (needs Node.js/npx), + OS keychain:
-  ```json
-  { "mcpServers": { "opentrace": {
-    "command": "npx",
-    "args": ["-y", "mcp-remote", "https://<host>/mcp/v1/", "--header", "Authorization: Bearer otk_…"]
-  } } }
-  ```
 
 ### Editor onboarding (`connect <path>` / `install`)
 

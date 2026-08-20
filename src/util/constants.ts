@@ -76,3 +76,35 @@ export const MARKETPLACE_REPO = "opentrace/opentrace-cli"
 export function pluginId(pluginName = PLUGIN_NAME, marketplaceName = MARKETPLACE_NAME): string {
   return `${pluginName}@${marketplaceName}`
 }
+
+/**
+ * Prefilled "add custom connector" link for the Claude app's chat surface (and
+ * claude.ai and mobile, which share the same account-level connector list).
+ *
+ * This replaces the `mcp-remote` stdio bridge otx used to write into
+ * `claude_desktop_config.json`. That bridge existed because the file validates
+ * stdio servers only — but the chat surface never needed that file: it takes
+ * connectors from the claude.ai account, and a custom connector accepts a remote
+ * MCP URL directly, on the same infrastructure a directory listing uses.
+ *
+ * The bridge cost more than it looked: it put the raw otk_ key in the argv of the
+ * npx process (readable via `ps` / `/proc/<pid>/cmdline`), required Node on PATH,
+ * spawned a proxy per session, and — because a plugin's server is scoped
+ * `plugin:<plugin>:<server>` — made local Code-tab sessions list OpenTrace twice.
+ * A custom connector authenticates over OAuth instead, so no key touches disk.
+ *
+ * The link only prefills the dialog; the user reviews the name and URL and
+ * confirms. `admin: true` targets the org-wide list instead of one account.
+ */
+export function customConnectorUrl(mcpUrl: string, opts: { admin?: boolean } = {}): string {
+  const base = opts.admin
+    ? "https://claude.ai/admin-settings/connectors"
+    : "https://claude.ai/customize/connectors"
+  const params = new URLSearchParams({
+    modal: "add-custom-connector",
+    connectorName: "OpenTrace",
+    // The server advertises the no-slash form as its OAuth resource identifier.
+    connectorUrl: mcpUrl.replace(/\/+$/, ""),
+  })
+  return `${base}?${params.toString()}`
+}

@@ -283,7 +283,30 @@ export async function createSandbox(stubOptions: Partial<StubOptions> = {}): Pro
           "const fs = require('node:fs'), path = require('node:path')",
           "const a = process.argv.slice(2)",
           "if (a[0] === '--version') { console.log('0.0.0 (stub)'); process.exit(0) }",
+          // `plugin install` resolves the plugin through the marketplace RECORD in
+          // plugins/known_marketplaces.json, which only `marketplace add` writes —
+          // settings.json's extraKnownMarketplaces is a declaration Claude Code acts
+          // on at session start. Model both, or the stub accepts an install that the
+          // real binary rejects with `not found in marketplace`.
+          "if (a[0] === 'plugin' && a[1] === 'marketplace' && a[2] === 'add') {",
+          "  const f = path.join(process.env.HOME, '.claude', 'plugins', 'known_marketplaces.json')",
+          "  let d = {}",
+          "  try { d = JSON.parse(fs.readFileSync(f, 'utf8')) } catch {}",
+          "  d['opentrace'] = { source: { source: 'github', repo: a[3] }, installLocation: path.join(process.env.HOME, '.claude', 'plugins', 'marketplaces', 'opentrace'), lastUpdated: 0 }",
+          "  fs.mkdirSync(path.dirname(f), { recursive: true })",
+          "  fs.writeFileSync(f, JSON.stringify(d, null, 2))",
+          "  console.log('Successfully added marketplace: opentrace')",
+          "  process.exit(0)",
+          "}",
           "if (a[0] === 'plugin' && a[1] === 'install') {",
+          "  const known = path.join(process.env.HOME, '.claude', 'plugins', 'known_marketplaces.json')",
+          "  let reg = {}",
+          "  try { reg = JSON.parse(fs.readFileSync(known, 'utf8')) } catch {}",
+          "  const mkt = String(a[2]).split('@')[1]",
+          "  if (!(mkt in reg)) {",
+          "    console.error('Failed to install plugin \"' + a[2] + '\": Plugin not found in marketplace \"' + mkt + '\".')",
+          "    process.exit(1)",
+          "  }",
           "  const f = path.join(process.env.HOME, '.claude', 'plugins', 'installed_plugins.json')",
           "  let d = { version: 2, plugins: {} }",
           "  try { d = JSON.parse(fs.readFileSync(f, 'utf8')) } catch {}",

@@ -110,7 +110,7 @@ const connectCmd = addInstallOptions(
     .description("Connect a client to OpenTrace with an API key (otk_…), or onboard editors when given a path"),
 )
 connectCmd
-  .option("--client <id>", "Target client for the API-key flow: claude-code | claude-desktop | cursor")
+  .option("--client <id>", "Target client for the API-key flow: claude-code | cursor")
   .action(async (tokenOrPath: string | undefined, opts) => {
     if (tokenOrPath && looksLikeToken(tokenOrPath)) {
       // Both forms carry a key; the positional argument is the one this branch
@@ -194,7 +194,7 @@ const loginCmd = program
   .description("Sign in to OpenTrace in your browser, then set up your tools (mints a CLI key)")
   .option("--base-url <url>", "OpenTrace API base URL", DEFAULT_BASE_URL)
   .option("--url <url>", "OpenTrace MCP endpoint or host (overrides --base-url)")
-  .option("--client <id>", "Target client for the minted key: claude-code | claude-desktop | cursor")
+  .option("--client <id>", "Target client for the minted key: claude-code | cursor")
   .option("--no-browser", "Don't launch a browser — print the sign-in URL to open manually")
   .option("--express", "Skip the Express/Custom question: every detected tool, all projects, usage monitoring on")
   .option("--track-usage", "Monitor your Claude Code usage in OpenTrace without asking")
