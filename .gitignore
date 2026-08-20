@@ -3,3 +3,7 @@ dist/
 *.js.map
 *.d.ts.map
 build-test/
+
+# Claude Code local session state and worktrees — never shared.
+.claude/worktrees/
+.claude/settings.local.json
