@@ -39,15 +39,17 @@ describe("install --express", () => {
     assert.equal(fs.existsSync(path.join(sb.project, ".claude", "settings.json")), false)
   })
 
-  it("announces the chat surface it is about to connect", async () => {
-    // Express cannot add an account-level connector on the user's behalf, so it
-    // announces the link it is going to print rather than promising a write.
+  it("says nothing about the chat surface — the plugin is what covers desktop", async () => {
+    // The plugin reaches the desktop Code tab through ~/.claude, and that is all
+    // onboarding owes the app. The chat surface is a different product surface,
+    // reached only when asked for by name via `connect --client claude-desktop`.
     sb.seedClaudeApp()
     sb.seedPluginToken(CLI_KEY)
     const r = await sb.run(["install", sb.project, "--express", "-y", ...sb.base])
     assert.equal(r.code, 0)
-    assert.match(r.stdout, /Desktop:\s+a link to connect the Claude app's chat surface/)
-    assert.match(r.output, /add-custom-connector/)
+    assert.doesNotMatch(r.stdout, /Desktop:/)
+    assert.doesNotMatch(r.output, /add-custom-connector/)
+    assert.equal(fs.existsSync(sb.claudeDesktopConfigPath()), false)
   })
 
   it("describes the flagged tools, not the detected ones", async () => {
@@ -185,12 +187,13 @@ describe("install and the Claude desktop app", () => {
   // plugin is already installed. The chat surface (and claude.ai, and mobile) takes
   // account-level connectors, which no local command can add on the user's behalf,
   // so otx hands over the prefilled link and writes nothing.
-  it("prints the connector link when the app is installed, and writes nothing", async () => {
+  it("leaves the chat surface alone entirely, even with the app installed", async () => {
+    // The happy path is the plugin, which already covers the Code tab. Onboarding
+    // neither writes to nor advertises the chat surface.
     sb.seedClaudeApp() // the Code tab has never run
     const r = await sb.run(["install", sb.project, "-y", "-g", "--claude-code", "--api-key", CLI_KEY, ...sb.base])
     assert.equal(r.code, 0)
-    assert.match(r.output, /account-level connectors, not local config/)
-    assert.match(r.output, /claude\.ai\/customize\/connectors\?modal=add-custom-connector/)
+    assert.doesNotMatch(r.output, /add-custom-connector/)
     assert.equal(
       fs.existsSync(sb.claudeDesktopConfigPath()),
       false,

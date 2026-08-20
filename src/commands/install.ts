@@ -2,7 +2,7 @@ import path from "node:path"
 import fs from "node:fs"
 import { checkbox, confirm, password, select } from "@inquirer/prompts"
 import { ALL_INTEGRATIONS, detectInstalled, integrationsFromFlags } from "../util/detect.js"
-import { DEFAULT_BASE_URL, MARKETPLACE_REPO, buildIngestUrl, buildMcpUrl, customConnectorUrl, pluginId } from "../util/constants.js"
+import { DEFAULT_BASE_URL, MARKETPLACE_REPO, buildIngestUrl, buildMcpUrl, pluginId } from "../util/constants.js"
 import { isInteractive } from "../util/tty.js"
 import { maskToken, validateTokenShape } from "../util/token.js"
 import { probeMcp } from "../util/mcp-probe.js"
@@ -13,7 +13,7 @@ import { resolveTelemetryPlan, writeTelemetryEnv, USAGE_PRIVACY_NOTE } from "../
 import { cliKeyId, recordKeyVerdict } from "../util/notice-state.js"
 import { loginWithBrowser } from "../util/oauth/flow.js"
 import { looksHeadless } from "../util/oauth/browser.js"
-import { claudeCodeSurfaces, hasClaudeCodeDesktop, isClaudeAppInstalled } from "../util/claude-app.js"
+import { claudeCodeSurfaces, hasClaudeCodeDesktop } from "../util/claude-app.js"
 import { ensurePluginInstalled } from "../util/claude-plugins.js"
 import { findKeyClient, hasKeyClientEntry } from "../key-clients/index.js"
 import type { Integration } from "../integrations/types.js"
@@ -427,15 +427,6 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
         console.log("  • Usage:   monitoring your Claude Code usage in OpenTrace")
         console.log(`             ${USAGE_PRIVACY_NOTE}`)
       }
-      // The chat surface of the Claude app is not one of the tools in the list
-      // above, and setting it up writes a file none of them named — so Express
-      // says so here. Carries the same Claude Code condition as the write itself:
-      // a run that named another tool is not a request to touch the Claude app.
-      // Its other prerequisite is a key, which the sign-in line below is already
-      // honest about.
-      if (isClaudeAppInstalled() && planTargets.some((i) => i.id === "claude-code")) {
-        console.log("  • Desktop: a link to connect the Claude app's chat surface (nothing written)")
-      }
       // Only promise the sign-in this run can actually perform: `--express -y`
       // and `--express` in CI have no browser to open, and the key step falls
       // back to whatever this machine already holds.
@@ -526,8 +517,8 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
     targetsClaudeCode: targets.some((i) => i.id === "claude-code"),
   })
 
-  // 6. The Claude desktop app's CHAT surface (and claude.ai, and mobile — one
-  //    account-level connector list serves all three). Not a file we write.
+  // 6. The Claude desktop app. Nothing to write: its Code tab shares ~/.claude
+  //    with the CLI, and its chat surface takes account-level connectors.
   //
   //    otx used to write an `mcp-remote` stdio bridge into
   //    claude_desktop_config.json here. That put the raw key in an npx process's
@@ -537,8 +528,9 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   //    the only way an account-level connector can be added anyway.
   //
   //    The Code tab needs nothing either way: it shares ~/.claude, where the
-  //    plugin is already installed.
-  const showConnectorLink = isClaudeAppInstalled() && targets.some((i) => i.id === "claude-code")
+  //    plugin is already installed — which is the whole of what onboarding owes the
+  //    desktop app. So nothing here advertises the chat surface: it is reached only
+  //    when asked for by name, with `otx connect --client claude-desktop`.
 
   // A bridge from an older otx is still a live stdio server holding a key, so
   // take it out rather than leaving it beside the connector we now recommend.
@@ -712,13 +704,8 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   if (staleBridge) {
     notes.push(
       `Removed the old \`mcp-remote\` bridge from ${staleBridge} — it carried your key in a ` +
-        "process argument. Use the connector link below instead.",
-    )
-  }
-  if (showConnectorLink) {
-    notes.push(
-      "Claude app chat, claude.ai and mobile use account-level connectors, not local config. " +
-        `Add OpenTrace once, here:\n  ${customConnectorUrl(mcpUrl)}`,
+        "process argument. The plugin covers the app's Code tab; for its chat surface run " +
+        "`otx connect --client claude-desktop`.",
     )
   }
 
