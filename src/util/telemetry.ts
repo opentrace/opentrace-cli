@@ -14,7 +14,8 @@ import os from "node:os"
 import path from "node:path"
 import { confirm, password, select } from "@inquirer/prompts"
 import { readJsonConfig, writeJsonConfig } from "./json-config.js"
-import { buildIngestUrl, buildTelemetryKeyUrl } from "./constants.js"
+import { clearTelemetryToken, writeTelemetryToken } from "./plugin-token.js"
+import { buildIngestUrl, buildTelemetryKeyUrl, toBaseUrl } from "./constants.js"
 import { TOKEN_REGEX, maskToken, validateTokenShape } from "./token.js"
 import { recordKeyVerdict, usageKeyId } from "./notice-state.js"
 
@@ -39,7 +40,32 @@ export function claudeSettingsPath(projectDir: string, opts: { global?: boolean 
     : path.join(projectDir, ".claude", "settings.json")
 }
 
-/** The full env block, endpoint derived from the active host. */
+/**
+ * The full env block, endpoint derived from the active host.
+ *
+ * Two families of key, written together because a reader who enabled monitoring wants both
+ * halves of it and neither is useful alone.
+ *
+ * The ``OTEL_*`` keys configure Claude Code's own exporter: what it sends and where.
+ * ``OTEL_METRICS_INCLUDE_REPOSITORY`` is off by default upstream and is the single setting
+ * per-repository cost rests on — without it no event carries a repository at all, and spend
+ * reaches one only by being matched to commits in time.
+ *
+ * ``OPENTRACE_API_URL`` configures the OpenTrace plugin's hooks, which report the branch
+ * each prompt worked on. **It duplicates the endpoint on purpose.** Claude Code strips
+ * ``OTEL_*`` from hook subprocesses — put both in one ``env`` block and a hook sees
+ * ``OPENTRACE_API_URL`` and not ``OTEL_EXPORTER_OTLP_ENDPOINT`` — so the plugin cannot read
+ * the exporter's configuration however carefully it tries. Left unset it falls back to the
+ * public host, which silently points a self-hosted install at the wrong place.
+ *
+ * **The key is deliberately not here.** That same stripping is what contains it: inside
+ * ``OTEL_EXPORTER_OTLP_HEADERS`` it reaches Claude Code's exporter and nothing else, whereas
+ * an ``OPENTRACE_*`` name is passed through to every hook, every Bash tool call, and every
+ * MCP server the session starts — readable with a bare ``env``, and apt to land verbatim in
+ * a transcript. The exposure is to the process environment, not to the file, so "it is the
+ * same file, the same permissions" did not answer it. The hooks read the key from
+ * ``~/.claude/opentrace-plugin.token`` at mode 0600 instead; see ``writeTelemetryEnv``.
+ */
 export function telemetryEnv(baseUrl: string, token: string): Record<string, string> {
   return {
     CLAUDE_CODE_ENABLE_TELEMETRY: "1",
@@ -49,14 +75,30 @@ export function telemetryEnv(baseUrl: string, token: string): Record<string, str
     OTEL_EXPORTER_OTLP_ENDPOINT: buildIngestUrl(baseUrl),
     OTEL_EXPORTER_OTLP_HEADERS: `Authorization=Bearer ${token}`,
     OTEL_METRICS_INCLUDE_ENTRYPOINT: "true",
+    OTEL_METRICS_INCLUDE_REPOSITORY: "true",
+    OPENTRACE_API_URL: toBaseUrl(baseUrl),
   }
 }
 
 /**
- * Exactly the keys this CLI writes — the set `disconnect` is allowed to delete.
- * Spelled out rather than derived from a dummy telemetryEnv() call so that
- * adding a key to the block is a deliberate act in both directions.
+ * The set `disconnect` is allowed to delete. Spelled out rather than derived from a dummy
+ * telemetryEnv() call so that adding a key to the block is a deliberate act in both
+ * directions — and so that a key this CLI has *stopped* writing can still be cleaned up.
+ * `OPENTRACE_TELEMETRY_API_KEY` is exactly that: earlier builds put it in the env block, so
+ * it stays on this list to be removed from the files they wrote, and is absent from
+ * `telemetryEnv` so no new file gets one.
  */
+/**
+ * Keys earlier builds wrote into the `env` block and this one no longer does.
+ *
+ * Stripped on every write, not merely left out. A settings file is *merged*, so omitting a
+ * key preserves whatever is already under it — the credential this build moved out of `env`
+ * would have stayed in every existing file for ever, and the move only protected machines
+ * that had never been set up. Removing it here is what makes upgrading remediate rather
+ * than just stop making it worse.
+ */
+export const LEGACY_TELEMETRY_ENV_KEYS = ["OPENTRACE_TELEMETRY_API_KEY"] as const
+
 export const TELEMETRY_ENV_KEYS = [
   "CLAUDE_CODE_ENABLE_TELEMETRY",
   "OTEL_METRICS_EXPORTER",
@@ -65,6 +107,9 @@ export const TELEMETRY_ENV_KEYS = [
   "OTEL_EXPORTER_OTLP_ENDPOINT",
   "OTEL_EXPORTER_OTLP_HEADERS",
   "OTEL_METRICS_INCLUDE_ENTRYPOINT",
+  "OTEL_METRICS_INCLUDE_REPOSITORY",
+  "OPENTRACE_API_URL",
+  "OPENTRACE_TELEMETRY_API_KEY",
 ] as const
 
 /** The usage key already configured in a settings file, if any. */
@@ -149,6 +194,10 @@ export function removeTelemetryEnv(configPath: string): TelemetryRemoval {
       settings.env = env
     }
     writeJsonConfig(configPath, settings)
+    // The key no longer lives in the block, so clearing the block alone would leave the
+    // hooks authenticated and still reporting after the user turned monitoring off. The
+    // MCP's own token file is deliberately untouched — that is `disconnect --plugin`.
+    clearTelemetryToken()
     return { removed: true, foreign: false }
   } catch (err) {
     return { removed: false, foreign: false, error: err instanceof Error ? err.message : String(err) }
@@ -158,15 +207,33 @@ export function removeTelemetryEnv(configPath: string): TelemetryRemoval {
 /**
  * Merge the telemetry block into the file's `env`, preserving every other
  * setting and any unrelated env vars. Returns whether a block was replaced.
+ *
+ * Also lands the key in `~/.claude/opentrace-telemetry.token` at mode 0600, which is how
+ * the plugin's hooks get it. They cannot read it from `env`: it is deliberately not written
+ * there, because Claude Code passes `env` down to every subprocess a session starts.
+ * Writing the file here keeps the two halves of enabling monitoring in one step — a block
+ * written without it leaves the hooks silently unauthenticated.
+ *
+ * **Its own file, not the MCP's.** `attachPluginKey` owns `opentrace-plugin.token` and puts
+ * a graph-reading CLI key there; this is a usage key that deliberately cannot read anything.
+ * Sharing one path made the outcome depend on which command wrote last.
+ *
+ * Any copy of the key an earlier build left in `env` is removed here — see
+ * `LEGACY_TELEMETRY_ENV_KEYS`. It has to go rather than merely be superseded, because the
+ * hooks would otherwise keep reading the stale value and a rotated key would fail quietly.
  */
 export function writeTelemetryEnv(
   configPath: string,
   env: Record<string, string>,
+  token: string,
 ): { existed: boolean } {
   const settings = readJsonConfig<ClaudeSettings>(configPath, {})
   const existed = settings.env?.CLAUDE_CODE_ENABLE_TELEMETRY !== undefined
-  settings.env = { ...(settings.env ?? {}), ...env }
+  const merged: Record<string, string> = { ...(settings.env ?? {}), ...env }
+  for (const key of LEGACY_TELEMETRY_ENV_KEYS) delete merged[key]
+  settings.env = merged
   writeJsonConfig(configPath, settings)
+  if (token) writeTelemetryToken(token)
   return { existed }
 }
 
@@ -296,6 +363,11 @@ export async function provisionUsageKey(baseUrl: string, cliToken: string): Prom
 export interface TelemetryPlan {
   configPath: string
   env: Record<string, string>
+  /**
+   * The ingest key. Carried beside `env` rather than inside it because it is written to a
+   * 0600 file, not to the settings block — see `telemetryEnv`.
+   */
+  token: string
   /** True when the file's existing usage key was still valid and kept. */
   reusedExisting: boolean
   isGlobalScope: boolean
@@ -491,7 +563,13 @@ export async function resolveTelemetryPlan(args: {
         console.log(`  ✓ usage key already in ${configPath} is still valid — keeping it.`)
       }
       return {
-        plan: { configPath, env: telemetryEnv(args.baseUrl, existingToken), reusedExisting: true, isGlobalScope },
+        plan: {
+          configPath,
+          env: telemetryEnv(args.baseUrl, existingToken),
+          token: existingToken,
+          reusedExisting: true,
+          isGlobalScope,
+        },
       }
     } else {
       console.warn("The usage key already configured was rejected at the ingest endpoint — minting a fresh one.")
@@ -538,6 +616,12 @@ export async function resolveTelemetryPlan(args: {
   // round-trip and stops any verdict about the key it replaces from lingering.
   recordKeyVerdict(usageKeyId(configPath), usage.token, "valid")
   return {
-    plan: { configPath, env: telemetryEnv(args.baseUrl, usage.token), reusedExisting: false, isGlobalScope },
+    plan: {
+      configPath,
+      env: telemetryEnv(args.baseUrl, usage.token),
+      token: usage.token,
+      reusedExisting: false,
+      isGlobalScope,
+    },
   }
 }
