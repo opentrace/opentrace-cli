@@ -278,15 +278,19 @@ function readToken() {
   }
 }
 
-function resolveMcpUrl(cwd) {
+// Trust rule: the endpoint comes from the environment or the user's own home-directory
+// settings, never from the repository. rpc() sends the API key to whatever this returns,
+// and `cwd` is whichever repo the user happened to open, so honouring
+// <cwd>/.claude/settings*.json would let any cloned repo point the key at its own host.
+// Nothing legitimate needs it: otx writes mcp_url to ~/.claude/settings.json only, and
+// Claude Code itself reads pluginConfigs from user settings only.
+function resolveMcpUrl() {
   // Strip any trailing slash rather than adding one (see DEFAULT_MCP_URL), which also
   // repairs a slashed value left in settings by an older otx.
   const canonical = (u) => u.replace(/\/+$/, "")
   if (process.env.OPENTRACE_MCP_URL) return canonical(process.env.OPENTRACE_MCP_URL.trim())
-  // Hooks can't read ${user_config.*}, but Claude Code persists it in settings.
+  // Hooks can't read ${user_config.*}, but Claude Code persists it in user settings.
   const candidates = [
-    path.join(cwd, ".claude", "settings.local.json"),
-    path.join(cwd, ".claude", "settings.json"),
     path.join(os.homedir(), ".claude", "settings.local.json"),
     path.join(os.homedir(), ".claude", "settings.json"),
   ]
@@ -561,7 +565,7 @@ async function main() {
   let binding = null
   let refreshFailure = null // "unreachable" | "bad_response"
   try {
-    binding = await resolveBinding(resolveMcpUrl(cwd), token, identity.ownerRepo, cachedBinding)
+    binding = await resolveBinding(resolveMcpUrl(), token, identity.ownerRepo, cachedBinding)
   } catch (err) {
     refreshFailure = err?.kind === "bad_response" ? "bad_response" : "unreachable"
     // This hook is silent by design; set OPENTRACE_PREWARM_DEBUG=1 to see why.
