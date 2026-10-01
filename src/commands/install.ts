@@ -684,7 +684,7 @@ export async function install(targetPath: string, opts: InstallCommandOptions): 
   if (telemetry.note) notes.push(telemetry.note)
   if (telemetry.plan) {
     try {
-      const { existed } = writeTelemetryEnv(telemetry.plan.configPath, telemetry.plan.env)
+      const { existed } = writeTelemetryEnv(telemetry.plan.configPath, telemetry.plan.env, telemetry.plan.token)
       results.push({
         label: "Claude Code (usage monitoring)",
         configPath: telemetry.plan.configPath,

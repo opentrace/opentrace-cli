@@ -6,10 +6,15 @@
 # node is unavailable or prewarm cannot run. Must print valid JSON to stdout.
 set -uo pipefail
 
+# Resolve our own directory rather than relying on ${CLAUDE_PLUGIN_ROOT}, which is only
+# set for an INSTALLED plugin. Wired by hand in a settings.json it is unset, and `set -u`
+# aborts before node ever runs — invisibly, because these hooks are meant to be quiet.
+ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
 payload=$(cat 2>/dev/null || true)
 
 if command -v node >/dev/null 2>&1; then
-  if out=$(printf '%s' "$payload" | node "${CLAUDE_PLUGIN_ROOT}/bin/prewarm.cjs" 2>/dev/null) && [ -n "$out" ]; then
+  if out=$(printf '%s' "$payload" | node "${ROOT}/bin/prewarm.cjs" 2>/dev/null) && [ -n "$out" ]; then
     printf '%s' "$out"
     exit 0
   fi

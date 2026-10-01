@@ -6,6 +6,11 @@
 # network). Prints {} for silent pass-through otherwise.
 set -euo pipefail
 
+# Resolve our own directory rather than relying on ${CLAUDE_PLUGIN_ROOT}, which is only
+# set for an INSTALLED plugin. Wired by hand in a settings.json it is unset, and `set -u`
+# aborts before node ever runs — invisibly, because these hooks are meant to be quiet.
+ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
 payload=$(cat)
 
 if command -v jq >/dev/null 2>&1; then
@@ -20,7 +25,7 @@ fi
 # case, where a bounded graph answer beats a series of greps.
 if printf '%s' "$text" | grep -qiE 'architect|dependenc|upstream|downstream|impact|blast radius|call graph|who calls|caller|callee|cross-repo|other repo|outage|incident|root cause|where (is|are|does|do|did)|does .* exist|is there (a|an|any)|do we have|how does .* work|entry ?point|subsystem|structure of|map (of|out)|overview of'; then
   if command -v node >/dev/null 2>&1; then
-    if out=$(printf '%s' "$payload" | node "${CLAUDE_PLUGIN_ROOT}/bin/prewarm.cjs" --prompt-hint 2>/dev/null) && [ -n "$out" ]; then
+    if out=$(printf '%s' "$payload" | node "${ROOT}/bin/prewarm.cjs" --prompt-hint 2>/dev/null) && [ -n "$out" ]; then
       printf '%s' "$out"
       exit 0
     fi

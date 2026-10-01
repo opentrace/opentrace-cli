@@ -8,6 +8,7 @@ A thin wrapper around the hosted OpenTrace **dynamic MCP server** (`https://api.
 - **`bin/prewarm.cjs`** — resolves the current checkout against OpenTrace at session start (see "Context prewarm" below).
 - **`hooks/session-start.sh`** — injects a ready-to-use binding for the current checkout (environment/workspace slugs, `source_id`, indexed commit, freshness vs. your HEAD) plus routing guidance, so the model's first OpenTrace call needs no discovery hops. Falls back to static workflow guidance when prewarm can't run.
 - **`hooks/user-prompt-submit.sh`** — when a prompt looks like an architecture, dependency, existence, or structure question, reminds the model that the graph tools can answer it — including the exact prewarmed parameters for this checkout when available. Silent (`{}`) otherwise.
+- **`bin/session-context.cjs`** + **`hooks/session-context.sh`** — report which repository and branch each prompt is working on (see "Session context" below). Silent (`{}`) always.
 - **`skills/setup/SKILL.md`** — `/opentrace:setup`, and model-invoked when the tools are missing or a call fails to authenticate. Walks the user from an unconnected server through sign-in to a verified tool call, and distinguishes the failure that looks like a broken plugin but isn't: valid credentials against an account with nothing indexed.
 
 ## Context prewarm
@@ -25,6 +26,94 @@ Details:
 - **Overrides**: `OPENTRACE_MCP_URL` (endpoint), and `OPENTRACE_ENVIRONMENT` + `OPENTRACE_WORKSPACE` (slugs, set both) to pin the scope instead of scanning your workspaces.
 - **Failure behavior**: a failed refresh serves the cached binding with a staleness note, or static guidance if nothing is cached. Unreachable endpoints and reachable-but-failing ones (auth rejected, tenant provisioning, malformed reply) are reported distinctly, so the note never blames the network for a server-side answer. The hook always answers within ~6s and never blocks the session.
 - **Debugging**: the hook is silent by design; set `OPENTRACE_PREWARM_DEBUG=1` to print the reason a refresh failed to stderr.
+
+## Session context
+
+Claude Code's own telemetry export names a repository but never a branch, and it resolves
+that repository **once at process launch** from the launch directory — it is never refreshed
+when the session moves. So a session that switches branches reports the first one for its
+whole life, and an orchestrator run launched in a non-git root reports nothing at all. Both
+are why per-pull-request cost used to be an estimate.
+
+These hooks fix it by observing the work as it happens. `session-context.cjs` runs on
+`SessionStart`, `CwdChanged`, `UserPromptSubmit` and `PostToolUse`, reads the git remote,
+branch and head commit for the directory the work is actually in, and posts them to
+`POST /ingest/claude-code/v1/session-context`. The join key is `prompt_id`, which the
+telemetry events already carry, so each prompt is priced against the branch it was on.
+
+Details:
+
+- **What it sends**: the git remote URL, branch, head commit, and the session/prompt/agent
+  ids. It never sends a user, an organisation, a file path, a prompt or any code. The server
+  attributes every observation to the member the API key belongs to, so there is nothing to
+  spoof by editing the script.
+- **Why the remote and not a repository key**: the key's provider segment is an internal
+  integration kind (GitHub's is `github_app`). The server derives it, so a rename there
+  cannot silently split one repository's charts in two across plugin versions.
+- **Set `OPENTRACE_API_URL`. It is not optional.** Claude Code does not pass `OTEL_*`
+  variables to hook subprocesses. Put both families in one settings `env` block and a hook
+  sees `OPENTRACE_API_URL` and *not* `OTEL_EXPORTER_OTLP_ENDPOINT`, so these hooks cannot
+  read the exporter's endpoint or borrow its `Authorization` header however they are
+  configured.
+
+  Without it the destination falls back to `https://api.opentrace.ai`. On a self-hosted or
+  local install that means your repositories and branches are reported to the public host
+  while the table you are watching stays empty.
+
+- **Put the key in `~/.claude/opentrace-telemetry.token`, not in the `env` block.** That
+  same stripping is what keeps the key contained: inside `OTEL_EXPORTER_OTLP_HEADERS` it
+  reaches Claude Code's exporter and nothing else, while anything named `OPENTRACE_*` is
+  inherited by every hook, every Bash tool call and every MCP server the session starts —
+  readable with a bare `env`, and apt to end up in a transcript. The file is mode 0600 and
+  is the first place these hooks look.
+
+  **Its own file, not the MCP's.** `~/.claude/opentrace-plugin.token` holds the CLI key the
+  MCP authenticates with, which can read your graphs; this is a usage key that deliberately
+  cannot read anything. They are separate files so that setting one up never overwrites the
+  other.
+
+  `otx install` writes the URL and the token file for you; a manual setup must add both by
+  hand.
+
+- **Resolution order for the key**, first match wins: `~/.claude/opentrace-telemetry.token`,
+  then `OPENTRACE_TELEMETRY_API_KEY`, then the `Authorization` entry in
+  `OTEL_EXPORTER_OTLP_HEADERS` when the destination is that same host, then
+  `~/.claude/opentrace-plugin.token`.
+
+  The file outranks the variable because only the CLI writes the file, so when both exist
+  the file is the newer fact — otherwise a copy of the variable left behind by an older
+  setup would shadow a rotated key and reporting would fail silently. With no file the
+  variable still wins, which keeps it usable as a deliberate override for anything invoking
+  these scripts outside Claude Code. The last entry is the upgrade path: a machine whose
+  plugin predates the telemetry file has only the MCP's key on disk, and borrowing it keeps
+  reporting alive until the CLI writes the new one.
+
+- **A credential only ever goes to the service it names.** Endpoint: `OPENTRACE_API_URL`,
+  else the origin of `OTEL_EXPORTER_OTLP_ENDPOINT`, else `https://api.opentrace.ai`.
+  Credentials that name OpenTrace — `~/.claude/opentrace-telemetry.token`,
+  `OPENTRACE_TELEMETRY_API_KEY` and `~/.claude/opentrace-plugin.token` — are used only when
+  the destination is one you named with `OPENTRACE_API_URL`, or the default. The `Authorization` entry in
+  `OTEL_EXPORTER_OTLP_HEADERS` belongs to whatever the exporter points at, so it is borrowed
+  only when that is the destination — a rule that matters for a process invoking this script
+  directly, since a Claude Code hook never sees that variable at all.
+  Nothing is inferred: a collector we were not told is OpenTrace is not treated as
+  OpenTrace, and the result is a missing observation rather than a leaked key. An
+  organisation exporting OTLP to its own collector while holding an OpenTrace key is a
+  normal setup, and resolving the two independently sent each service's bearer token to the
+  other one's host.
+- **HTTPS only**, except to loopback for local development. The request carries a bearer
+  token, so a plaintext destination is refused rather than downgraded.
+- **Debounce**: one post per `(session, agent, prompt, repository, branch)` per minute,
+  cached in `~/.claude/opentrace-session-context.json`. The repeats a tool hook produces
+  inside one prompt collapse to a single post, while every prompt still gets reported —
+  the server joins on the prompt id, so a debounce that dropped prompts would silently
+  price them as unattributed.
+- **Failure behavior**: silent and open in every case — no node, no git, a detached HEAD, a
+  checkout with no remote, no credential, no network. Every path prints `{}` and exits 0, and
+  the request is bounded at 2s. A missing observation shows up server-side as unattributed
+  spend rather than as an error in front of your prompt.
+- **`OT_CLAUDE_SESSION_ID`**: written to `$CLAUDE_ENV_FILE` at session start so your own
+  tooling can name the session it is running inside.
 
 ## MCP tools (served dynamically by opentrace-api)
 
@@ -86,6 +175,6 @@ This plugin sends data to OpenTrace's hosted API (`api.opentrace.ai`), operated 
 
 **What is sent.** MCP tool calls carry the query arguments Claude constructs — search terms, symbol names, repository and workspace identifiers. The session-start prewarm additionally sends the current checkout's git remote URL and commit SHAs, so the server can resolve which indexed repository you are working in. Your source code is read from the graphs OpenTrace has already indexed under your account; the plugin does not upload working-tree file contents.
 
-**What is stored locally.** An API key at `~/.claude/opentrace-plugin.token` (mode 0600) when you connect with one, and a resolved-binding cache at `~/.claude/opentrace-prewarm.json`. Delete either file to clear it.
+**What is stored locally.** The MCP's API key at `~/.claude/opentrace-plugin.token` (mode 0600) when you connect with one, the usage key these hooks report with at `~/.claude/opentrace-telemetry.token` (mode 0600) when monitoring is set up, and a resolved-binding cache at `~/.claude/opentrace-prewarm.json`. Delete any of them to clear it; `otx disconnect --usage` removes the usage key, and `otx disconnect --plugin` the MCP's.
 
 **Data collection, retention, third-party sharing and contact details** are covered in full by the OpenTrace privacy policy: <https://docs.opentrace.com/privacy-policy/>. Terms of service: <https://docs.opentrace.com/terms-of-service/>.

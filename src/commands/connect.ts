@@ -116,7 +116,7 @@ export async function connectWithKey(token: string, opts: ConnectKeyOptions): Pr
     if (telemetry.note) console.log(`\n${telemetry.note}`)
     if (!telemetry.plan) return
     try {
-      const { existed } = writeTelemetryEnv(telemetry.plan.configPath, telemetry.plan.env)
+      const { existed } = writeTelemetryEnv(telemetry.plan.configPath, telemetry.plan.env, telemetry.plan.token)
       console.log()
       console.log(`✓ Usage monitoring ${existed ? "updated" : "enabled"} for Claude Code`)
       console.log(`  Settings:  ${telemetry.plan.configPath}`)
